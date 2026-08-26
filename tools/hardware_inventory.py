@@ -25,6 +25,9 @@ def main() -> int:
         driver.communication_test()
         inventory = asdict(driver.inspect_device())
         inventory["basecode"]["reserved"] = inventory["basecode"]["reserved"].hex(" ")
+        inventory["modules"]["primary_cassette"] = inventory["modules"][
+            "primary_cassette"
+        ].value
         inventory["ftdi"] = {
             "serial": transport.device_info.serial_number,
             "description": transport.device_info.description,

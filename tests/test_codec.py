@@ -9,7 +9,9 @@ from multiflo.codec import (
     MessageClass,
     decode_frame,
     encode_request,
+    encode_peristaltic_dispense,
 )
+from multiflo.models import PeristalticDispense
 from multiflo.errors import ProtocolError
 
 
@@ -21,6 +23,22 @@ DISPENSE_PACKET = bytes.fromhex(
 
 
 class CodecTests(unittest.TestCase):
+    def test_calib1_peristaltic_dispense_golden_packet(self) -> None:
+        step = PeristalticDispense(volume_ul=100)
+        body = bytes.fromhex(
+            "05 64 00 01 00 00 00 A1 03 0A 00 02 "
+            "FF FF FF FF FF FF 00 01 00 00 00 00"
+        )
+        self.assertEqual(encode_peristaltic_dispense(step), body)
+        self.assertEqual(
+            encode_request(0x008F, body=body),
+            bytes.fromhex(
+                "01 02 8F 00 01 00 00 18 00 40 F8 "
+                "05 64 00 01 00 00 00 A1 03 0A 00 02 "
+                "FF FF FF FF FF FF 00 01 00 00 00 00"
+            ),
+        )
+
     def test_communication_test_golden_packet(self) -> None:
         self.assertEqual(encode_request(0x0073), COMMUNICATION_TEST_PACKET)
 

@@ -7,12 +7,14 @@ from enum import IntEnum
 import struct
 
 from .errors import ProtocolError, ValidationError
+from .models import CASSETTE_CODES, FlowRate, PeristalticDispense
 
 
 HEADER_SIZE = 11
 MAX_BODY_LENGTH = 0xFFFF
 _HEADER_WITHOUT_CHECKSUM = struct.Struct("<BBHBHH")
 _HEADER = struct.Struct("<BBHBHHH")
+_PERISTALTIC_DISPENSE = struct.Struct("<BHBBbbHHB6sBB4s")
 
 
 class MessageClass(IntEnum):
@@ -77,6 +79,27 @@ def encode_request(command_id: int, message_id: int = 0, body: bytes = b"") -> b
         message_id,
         body,
     ).encode()
+
+
+def encode_peristaltic_dispense(step: PeristalticDispense) -> bytes:
+    """Encode the proven full-plate 96-deep-well peristaltic body."""
+
+    flow_rate = {FlowRate.LOW: 0, FlowRate.MEDIUM: 1}[step.flow_rate]
+    return _PERISTALTIC_DISPENSE.pack(
+        5,  # Plate type: 96 deep well.
+        step.volume_ul,
+        flow_rate,
+        CASSETTE_CODES[step.cassette_type],
+        0,  # Horizontal X offset.
+        0,  # Horizontal Y offset.
+        0x03A1,  # Proven dispense height for plate type 5.
+        step.pre_dispense_volume_ul,
+        step.pre_dispense_cycles,
+        b"\xff" * 6,  # Full fixed 48-position map.
+        0,  # Inverted row-skip mask: skip no rows.
+        1,  # Primary peristaltic pump.
+        b"\x00" * 4,
+    )
 
 
 @dataclass(frozen=True, slots=True)

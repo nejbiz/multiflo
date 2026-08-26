@@ -13,13 +13,21 @@ from .codec import (
     MessageClass,
     decode_frame,
     decode_header,
+    encode_peristaltic_dispense,
     encode_request,
 )
-from .errors import DeviceError, ProtocolError, TransportError
+from .errors import DeviceError, ProtocolError, TransportError, UnknownExecutionState
+from .models import (
+    CASSETTE_TYPES_BY_CODE,
+    CassetteType,
+    PeristalticDispense,
+    validate_volume_for_cassette,
+)
 from .transport import ByteTransport
 
 
 COMMUNICATION_TEST = 0x0073
+PERISTALTIC_DISPENSE = 0x008F
 ACK = 0x06
 NAK = 0x15
 
@@ -47,6 +55,7 @@ class InstalledModules:
     primary_peristaltic: bool
     secondary_peristaltic: bool
     half_microliter_supported: bool
+    primary_cassette: CassetteType
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,12 +68,21 @@ class ReadOnlyDeviceInfo:
 class MultiFloDriver:
     """Serialize request/response exchanges over one owned transport."""
 
-    def __init__(self, transport: ByteTransport, *, max_body_length: int = MAX_BODY_LENGTH) -> None:
+    def __init__(
+        self,
+        transport: ByteTransport,
+        *,
+        expected_product_serial: str | None = None,
+        max_body_length: int = MAX_BODY_LENGTH,
+    ) -> None:
         self.transport = transport
+        self.expected_product_serial = expected_product_serial
         self.max_body_length = max_body_length
         self._next_message_id = 0
         self._exchange_lock = Lock()
         self._is_open = False
+        self._operator_confirmed_idle = False
+        self._motion_preflight: ReadOnlyDeviceInfo | None = None
 
     def open(self) -> None:
         if not self._is_open:
@@ -77,6 +95,8 @@ class MultiFloDriver:
                 self.transport.close()
             finally:
                 self._is_open = False
+                self._operator_confirmed_idle = False
+                self._motion_preflight = None
 
     def communication_test(self) -> ExchangeResult:
         """Send the bodyless, non-motion communication-test command only."""
@@ -118,12 +138,26 @@ class MultiFloDriver:
             raise ProtocolError("half-microliter response must contain one data byte")
         return bool(data[0])
 
+    def query_peristaltic_cassette(self, pump: int) -> CassetteType:
+        if pump not in (1, 2):
+            raise ProtocolError("peristaltic pump must be 1 or 2")
+        data = self._read_only_data(0x0108, bytes((pump,)))
+        if len(data) != 1:
+            raise ProtocolError("peristaltic-cassette response must contain one data byte")
+        try:
+            return CASSETTE_TYPES_BY_CODE[data[0]]
+        except KeyError as error:
+            raise ProtocolError(
+                f"instrument returned unknown cassette type 0x{data[0]:02x}"
+            ) from error
+
     def inspect_device(self) -> ReadOnlyDeviceInfo:
         serial = self.query_product_serial_number()
         version = self.query_basecode_version()
         primary = self.query_peristaltic_installed(1)
         secondary = self.query_peristaltic_installed(2)
         half_microliter = self.query_half_microliter_support()
+        cassette = self.query_peristaltic_cassette(1)
         return ReadOnlyDeviceInfo(
             serial,
             version,
@@ -131,8 +165,68 @@ class MultiFloDriver:
                 primary,
                 secondary,
                 half_microliter,
+                cassette,
             ),
         )
+
+    def authorize_motion(self, *, operator_confirmed_idle: bool) -> None:
+        """Record an operator's per-run idle/setup confirmation.
+
+        The base protocol's authoritative busy query is not yet recovered. This
+        confirmation is therefore deliberately required before the fresh
+        communication and inventory preflight used by Phase 2.
+        """
+
+        if not operator_confirmed_idle:
+            raise ProtocolError("operator idle/setup confirmation is required")
+        self._operator_confirmed_idle = True
+        self._motion_preflight = None
+
+    def prepare_motion(self) -> ReadOnlyDeviceInfo:
+        if not self._operator_confirmed_idle:
+            raise ProtocolError("motion has not been authorized by the operator")
+        if not self.expected_product_serial:
+            raise ProtocolError("an expected product serial is required for motion")
+        self.communication_test()
+        info = self.inspect_device()
+        if info.product_serial_number != self.expected_product_serial:
+            raise ProtocolError(
+                "connected instrument serial does not match the motion allowlist"
+            )
+        if not info.modules.primary_peristaltic:
+            raise ProtocolError("primary peristaltic pump is not installed")
+        if info.modules.primary_cassette is CassetteType.ANY:
+            raise ProtocolError("instrument cassette setting must be 1ul, 5ul, or 10ul")
+        self._motion_preflight = info
+        return info
+
+    def peristaltic_dispense(self, step: PeristalticDispense) -> ExchangeResult:
+        info = self._motion_preflight
+        if info is None:
+            raise ProtocolError("motion preflight has not completed")
+        installed = info.modules.primary_cassette
+        if step.cassette_type is not CassetteType.ANY and step.cassette_type is not installed:
+            raise ProtocolError(
+                f"requested {step.cassette_type.value} cassette does not match "
+                f"instrument setting {installed.value}"
+            )
+        validate_volume_for_cassette(step.volume_ul, installed)
+        if step.pre_dispense_volume_ul:
+            validate_volume_for_cassette(step.pre_dispense_volume_ul, installed)
+        body = encode_peristaltic_dispense(step)
+        try:
+            result = self._exchange(PERISTALTIC_DISPENSE, body)
+            self._response_data(PERISTALTIC_DISPENSE, result.response.body)
+            return result
+        except DeviceError:
+            raise
+        except (TransportError, ProtocolError) as error:
+            self._operator_confirmed_idle = False
+            self._motion_preflight = None
+            raise UnknownExecutionState(
+                "communication failed after the dispense command was sent; "
+                "do not retry automatically"
+            ) from error
 
     def _read_only_data(self, command_id: int, body: bytes = b"") -> bytes:
         result = self._exchange(command_id, body)

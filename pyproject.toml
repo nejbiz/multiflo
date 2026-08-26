@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "Pure Python driver for the base BioTek MultiFlo"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "fastapi>=0.141.1",
+    "uvicorn>=0.52.4",
+]
 
 [build-system]
 requires = ["setuptools>=77"]
@@ -16,3 +19,9 @@ package-dir = { multiflo = "." }
 
 [tool.uv]
 package = true
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pypdf>=6.16.2",
+]
