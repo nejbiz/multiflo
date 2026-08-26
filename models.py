@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class FlowRate(str, Enum):
     LOW = "low"
     MEDIUM = "medium"
+    HIGH = "high"
 
 
 class CassetteType(str, Enum):
@@ -18,6 +19,11 @@ class CassetteType(str, Enum):
     ONE_UL = "1ul"
     FIVE_UL = "5ul"
     TEN_UL = "10ul"
+
+
+class PlateType(str, Enum):
+    WELL_96 = "96_well"
+    DEEP_WELL_96 = "96_deep_well"
 
 
 CASSETTE_CODES = {
@@ -54,18 +60,19 @@ def validate_volume_for_cassette(volume_ul: int, cassette_type: CassetteType) ->
 
 
 class PeristalticDispense(BaseModel):
-    """One full-plate dispense using the proven 96-deep-well geometry."""
+    """One primary peristaltic dispense to a supported 96-well geometry."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     operation: Literal["peristaltic_dispense"] = "peristaltic_dispense"
-    plate_type: Literal["96_deep_well"] = "96_deep_well"
+    plate_type: PlateType = PlateType.DEEP_WELL_96
     pump: Literal["primary"] = "primary"
     volume_ul: int = Field(ge=1, le=3000)
     flow_rate: FlowRate = FlowRate.MEDIUM
     cassette_type: CassetteType = CassetteType.ANY
     pre_dispense_volume_ul: int = Field(default=10, ge=0, le=3000)
     pre_dispense_cycles: int = Field(default=2, ge=0, le=255)
+    columns: Literal["all"] | tuple[int, ...] = "all"
 
     @model_validator(mode="after")
     def validate_dispense(self) -> "PeristalticDispense":
@@ -79,12 +86,66 @@ class PeristalticDispense(BaseModel):
                 self.pre_dispense_volume_ul,
                 self.cassette_type,
             )
+        if self.columns != "all":
+            if not self.columns:
+                raise ValueError("at least one dispense column is required")
+            if any(column < 1 or column > 12 for column in self.columns):
+                raise ValueError("96-well columns must be between 1 and 12")
+            if len(set(self.columns)) != len(self.columns):
+                raise ValueError("dispense columns must be unique")
         return self
+
+
+class PeristalticPrime(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    operation: Literal["peristaltic_prime"] = "peristaltic_prime"
+    plate_type: PlateType = PlateType.WELL_96
+    pump: Literal["primary"] = "primary"
+    volume_ul: int = Field(ge=1, le=3000)
+    flow_rate: FlowRate = FlowRate.MEDIUM
+    cassette_type: CassetteType = CassetteType.ANY
+
+
+class PeristalticPurge(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    operation: Literal["peristaltic_purge"] = "peristaltic_purge"
+    plate_type: PlateType = PlateType.WELL_96
+    pump: Literal["primary"] = "primary"
+    volume_ul: int = Field(ge=1, le=3000)
+    flow_rate: FlowRate = FlowRate.MEDIUM
+    cassette_type: CassetteType = CassetteType.ANY
+
+
+class Shake(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    operation: Literal["shake"] = "shake"
+    plate_type: PlateType = PlateType.WELL_96
+    duration_seconds: int = Field(ge=1, le=60)
+    move_carrier_home: bool = True
+    axis: Literal["x"] = "x"
+    speed: Literal["medium"] = "medium"
+
+
+class Soak(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    operation: Literal["soak"] = "soak"
+    plate_type: PlateType = PlateType.WELL_96
+    duration_seconds: int = Field(ge=1, le=60)
+    move_carrier_home: bool = True
+
+
+ProtocolStep = Annotated[
+    PeristalticDispense | PeristalticPrime | PeristalticPurge | Shake | Soak,
+    Field(discriminator="operation"),
+]
 
 
 class Protocol(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str = Field(min_length=1, max_length=64)
-    steps: list[PeristalticDispense] = Field(min_length=1, max_length=100)
-
+    steps: list[ProtocolStep] = Field(min_length=1, max_length=100)

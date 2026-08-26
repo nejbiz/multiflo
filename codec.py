@@ -7,7 +7,16 @@ from enum import IntEnum
 import struct
 
 from .errors import ProtocolError, ValidationError
-from .models import CASSETTE_CODES, FlowRate, PeristalticDispense
+from .models import (
+    CASSETTE_CODES,
+    FlowRate,
+    PeristalticDispense,
+    PeristalticPrime,
+    PeristalticPurge,
+    PlateType,
+    Shake,
+    Soak,
+)
 
 
 HEADER_SIZE = 11
@@ -15,6 +24,12 @@ MAX_BODY_LENGTH = 0xFFFF
 _HEADER_WITHOUT_CHECKSUM = struct.Struct("<BBHBHH")
 _HEADER = struct.Struct("<BBHBHHH")
 _PERISTALTIC_DISPENSE = struct.Struct("<BHBBbbHHB6sBB4s")
+_PERISTALTIC_PRIME_PURGE = struct.Struct("<BHHBBBB2s")
+_SHAKE_SOAK = struct.Struct("<BBHBBH4s")
+
+_PLATE_CODES = {PlateType.WELL_96: 4, PlateType.DEEP_WELL_96: 5}
+_DISPENSE_HEIGHTS = {PlateType.WELL_96: 336, PlateType.DEEP_WELL_96: 929}
+_FLOW_CODES = {FlowRate.LOW: 0, FlowRate.MEDIUM: 1, FlowRate.HIGH: 2}
 
 
 class MessageClass(IntEnum):
@@ -84,20 +99,87 @@ def encode_request(command_id: int, message_id: int = 0, body: bytes = b"") -> b
 def encode_peristaltic_dispense(step: PeristalticDispense) -> bytes:
     """Encode the proven full-plate 96-deep-well peristaltic body."""
 
-    flow_rate = {FlowRate.LOW: 0, FlowRate.MEDIUM: 1}[step.flow_rate]
+    position_map = _encode_96_column_map(step.plate_type, step.columns)
     return _PERISTALTIC_DISPENSE.pack(
-        5,  # Plate type: 96 deep well.
+        _PLATE_CODES[step.plate_type],
         step.volume_ul,
-        flow_rate,
+        _FLOW_CODES[step.flow_rate],
         CASSETTE_CODES[step.cassette_type],
         0,  # Horizontal X offset.
         0,  # Horizontal Y offset.
-        0x03A1,  # Proven dispense height for plate type 5.
+        _DISPENSE_HEIGHTS[step.plate_type],
         step.pre_dispense_volume_ul,
         step.pre_dispense_cycles,
-        b"\xff" * 6,  # Full fixed 48-position map.
+        position_map,
         0,  # Inverted row-skip mask: skip no rows.
         1,  # Primary peristaltic pump.
+        b"\x00" * 4,
+    )
+
+
+def _encode_96_column_map(
+    plate_type: PlateType,
+    columns: Literal["all"] | tuple[int, ...],
+) -> bytes:
+    if columns == "all":
+        return b"\xff" * 6
+    bits = [0] * 48
+    for column in columns:
+        bits[column - 1] = 1
+    # LHC retains enabled, unused positions when a deep-well partial map is
+    # selected. They are ignored for a 12-column plate but kept for an exact
+    # fixture-compatible encoding.
+    if plate_type is PlateType.DEEP_WELL_96:
+        bits[12:] = [1] * 36
+    packed = bytearray(6)
+    for index, enabled in enumerate(bits):
+        packed[index // 8] |= enabled << (index % 8)
+    return bytes(packed)
+
+
+def encode_peristaltic_prime(step: PeristalticPrime) -> bytes:
+    return _encode_peristaltic_prime_purge(step)
+
+
+def encode_peristaltic_purge(step: PeristalticPurge) -> bytes:
+    return _encode_peristaltic_prime_purge(step)
+
+
+def _encode_peristaltic_prime_purge(
+    step: PeristalticPrime | PeristalticPurge,
+) -> bytes:
+    return _PERISTALTIC_PRIME_PURGE.pack(
+        _PLATE_CODES[step.plate_type],
+        step.volume_ul,
+        0,  # Duration mode is intentionally unsupported.
+        _FLOW_CODES[step.flow_rate],
+        1,  # Vendor volume-mode fixture flag.
+        CASSETTE_CODES[step.cassette_type],
+        1,  # Primary peristaltic pump.
+        b"\x00" * 2,
+    )
+
+
+def encode_shake(step: Shake) -> bytes:
+    return _SHAKE_SOAK.pack(
+        _PLATE_CODES[step.plate_type],
+        int(step.move_carrier_home),
+        step.duration_seconds,
+        3,  # Medium (5 Hz), recovered from calib10/calib15/calib16.
+        0,  # X axis.
+        0,
+        b"\x00" * 4,
+    )
+
+
+def encode_soak(step: Soak) -> bytes:
+    return _SHAKE_SOAK.pack(
+        _PLATE_CODES[step.plate_type],
+        int(step.move_carrier_home),
+        0,
+        3,  # Retained vendor medium-speed field; no shake is requested.
+        0,
+        step.duration_seconds,
         b"\x00" * 4,
     )
 

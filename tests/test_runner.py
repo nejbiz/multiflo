@@ -25,7 +25,7 @@ class BlockingDriver:
         if not operator_confirmed_idle:
             raise RuntimeError("confirmation missing")
 
-    def prepare_motion(self) -> None:
+    def prepare_motion(self, *, require_primary_peristaltic: bool = True) -> None:
         pass
 
     def peristaltic_dispense(self, step: PeristalticDispense) -> ExchangeResult:

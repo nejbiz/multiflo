@@ -14,13 +14,21 @@ from .codec import (
     decode_frame,
     decode_header,
     encode_peristaltic_dispense,
+    encode_peristaltic_prime,
+    encode_peristaltic_purge,
     encode_request,
+    encode_shake,
+    encode_soak,
 )
 from .errors import DeviceError, ProtocolError, TransportError, UnknownExecutionState
 from .models import (
     CASSETTE_TYPES_BY_CODE,
     CassetteType,
     PeristalticDispense,
+    PeristalticPrime,
+    PeristalticPurge,
+    Shake,
+    Soak,
     validate_volume_for_cassette,
 )
 from .transport import ByteTransport
@@ -28,6 +36,9 @@ from .transport import ByteTransport
 
 COMMUNICATION_TEST = 0x0073
 PERISTALTIC_DISPENSE = 0x008F
+PERISTALTIC_PRIME = 0x0090
+PERISTALTIC_PURGE = 0x0091
+SHAKE_SOAK = 0x00A3
 ACK = 0x06
 NAK = 0x15
 
@@ -182,7 +193,7 @@ class MultiFloDriver:
         self._operator_confirmed_idle = True
         self._motion_preflight = None
 
-    def prepare_motion(self) -> ReadOnlyDeviceInfo:
+    def prepare_motion(self, *, require_primary_peristaltic: bool = True) -> ReadOnlyDeviceInfo:
         if not self._operator_confirmed_idle:
             raise ProtocolError("motion has not been authorized by the operator")
         if not self.expected_product_serial:
@@ -193,30 +204,63 @@ class MultiFloDriver:
             raise ProtocolError(
                 "connected instrument serial does not match the motion allowlist"
             )
-        if not info.modules.primary_peristaltic:
-            raise ProtocolError("primary peristaltic pump is not installed")
-        if info.modules.primary_cassette is CassetteType.ANY:
-            raise ProtocolError("instrument cassette setting must be 1ul, 5ul, or 10ul")
+        if require_primary_peristaltic:
+            if not info.modules.primary_peristaltic:
+                raise ProtocolError("primary peristaltic pump is not installed")
+            if info.modules.primary_cassette is CassetteType.ANY:
+                raise ProtocolError("instrument cassette setting must be 1ul, 5ul, or 10ul")
         self._motion_preflight = info
         return info
 
     def peristaltic_dispense(self, step: PeristalticDispense) -> ExchangeResult:
-        info = self._motion_preflight
-        if info is None:
-            raise ProtocolError("motion preflight has not completed")
-        installed = info.modules.primary_cassette
-        if step.cassette_type is not CassetteType.ANY and step.cassette_type is not installed:
-            raise ProtocolError(
-                f"requested {step.cassette_type.value} cassette does not match "
-                f"instrument setting {installed.value}"
-            )
+        installed = self._check_peristaltic_cassette(step.cassette_type)
         validate_volume_for_cassette(step.volume_ul, installed)
         if step.pre_dispense_volume_ul:
             validate_volume_for_cassette(step.pre_dispense_volume_ul, installed)
-        body = encode_peristaltic_dispense(step)
+        return self._motion_exchange(
+            PERISTALTIC_DISPENSE,
+            encode_peristaltic_dispense(step),
+        )
+
+    def peristaltic_prime(self, step: PeristalticPrime) -> ExchangeResult:
+        self._check_peristaltic_cassette(step.cassette_type)
+        return self._motion_exchange(PERISTALTIC_PRIME, encode_peristaltic_prime(step))
+
+    def peristaltic_purge(self, step: PeristalticPurge) -> ExchangeResult:
+        self._check_peristaltic_cassette(step.cassette_type)
+        return self._motion_exchange(PERISTALTIC_PURGE, encode_peristaltic_purge(step))
+
+    def shake(self, step: Shake) -> ExchangeResult:
+        self._require_motion_preflight()
+        return self._motion_exchange(SHAKE_SOAK, encode_shake(step))
+
+    def soak(self, step: Soak) -> ExchangeResult:
+        self._require_motion_preflight()
+        return self._motion_exchange(SHAKE_SOAK, encode_soak(step))
+
+    def _require_motion_preflight(self) -> ReadOnlyDeviceInfo:
+        if self._motion_preflight is None:
+            raise ProtocolError("motion preflight has not completed")
+        return self._motion_preflight
+
+    def _check_peristaltic_cassette(self, requested: CassetteType) -> CassetteType:
+        info = self._require_motion_preflight()
+        if not info.modules.primary_peristaltic:
+            raise ProtocolError("primary peristaltic pump is not installed")
+        installed = info.modules.primary_cassette
+        if installed is CassetteType.ANY:
+            raise ProtocolError("instrument cassette setting must be 1ul, 5ul, or 10ul")
+        if requested is not CassetteType.ANY and requested is not installed:
+            raise ProtocolError(
+                f"requested {requested.value} cassette does not match "
+                f"instrument setting {installed.value}"
+            )
+        return installed
+
+    def _motion_exchange(self, command_id: int, body: bytes) -> ExchangeResult:
         try:
-            result = self._exchange(PERISTALTIC_DISPENSE, body)
-            self._response_data(PERISTALTIC_DISPENSE, result.response.body)
+            result = self._exchange(command_id, body)
+            self._response_data(command_id, result.response.body)
             return result
         except DeviceError:
             raise
@@ -224,7 +268,7 @@ class MultiFloDriver:
             self._operator_confirmed_idle = False
             self._motion_preflight = None
             raise UnknownExecutionState(
-                "communication failed after the dispense command was sent; "
+                f"communication failed after motion command 0x{command_id:04x} was sent; "
                 "do not retry automatically"
             ) from error
 

@@ -12,6 +12,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from .driver import MultiFloDriver
 from .errors import BusyError, UnknownExecutionState
 from .models import Protocol
+from .models import (
+    PeristalticDispense,
+    PeristalticPrime,
+    PeristalticPurge,
+    Shake,
+    Soak,
+)
 
 
 class RunState(str, Enum):
@@ -136,7 +143,13 @@ class ProtocolRunner:
             self.driver.authorize_motion(
                 operator_confirmed_idle=operator_confirmed_idle,
             )
-            self.driver.prepare_motion()
+            requires_peristaltic = any(
+                isinstance(step, (PeristalticDispense, PeristalticPrime, PeristalticPurge))
+                for step in record.protocol.steps
+            )
+            self.driver.prepare_motion(
+                require_primary_peristaltic=requires_peristaltic,
+            )
             for index, step in enumerate(record.protocol.steps):
                 with self._lock:
                     if record.abort_requested:
@@ -144,12 +157,23 @@ class ProtocolRunner:
                         record.current_step = None
                         return
                     record.current_step = index
-                exchange = self.driver.peristaltic_dispense(step)
+                if isinstance(step, PeristalticDispense):
+                    exchange = self.driver.peristaltic_dispense(step)
+                elif isinstance(step, PeristalticPrime):
+                    exchange = self.driver.peristaltic_prime(step)
+                elif isinstance(step, PeristalticPurge):
+                    exchange = self.driver.peristaltic_purge(step)
+                elif isinstance(step, Shake):
+                    exchange = self.driver.shake(step)
+                elif isinstance(step, Soak):
+                    exchange = self.driver.soak(step)
+                else:
+                    raise TypeError(f"unsupported protocol step {type(step).__name__}")
                 with self._lock:
                     record.results.append(
                         StepResult(
                             step_index=index,
-                            operation="peristaltic_dispense",
+                            operation=step.operation,
                             device_status=int.from_bytes(
                                 exchange.response.body[:2], "little"
                             ),

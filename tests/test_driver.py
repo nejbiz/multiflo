@@ -7,7 +7,10 @@ from multiflo.codec import (
     Frame,
     MessageClass,
     encode_peristaltic_dispense,
+    encode_peristaltic_prime,
+    encode_peristaltic_purge,
     encode_request,
+    encode_shake,
 )
 from multiflo.driver import (
     BasecodeVersionInfo,
@@ -16,7 +19,13 @@ from multiflo.driver import (
     ReadOnlyDeviceInfo,
 )
 from multiflo.errors import DeviceError, ProtocolError, TransportError, UnknownExecutionState
-from multiflo.models import CassetteType, PeristalticDispense
+from multiflo.models import (
+    CassetteType,
+    PeristalticDispense,
+    PeristalticPrime,
+    PeristalticPurge,
+    Shake,
+)
 from multiflo.transport import ScriptedFakeTransport
 
 
@@ -101,6 +110,29 @@ class DriverTests(unittest.TestCase):
         )
         with self.assertRaises(UnknownExecutionState):
             driver.peristaltic_dispense(PeristalticDispense(volume_ul=100))
+
+    def test_phase3_motion_commands_use_recovered_bodies(self) -> None:
+        prime = PeristalticPrime(volume_ul=3000)
+        purge = PeristalticPurge(volume_ul=2000)
+        shake = Shake(duration_seconds=5)
+        fake = ScriptedFakeTransport(
+            [response(0x0090), response(0x0091), response(0x00A3)],
+            expected_writes=[
+                encode_request(0x0090, 0, encode_peristaltic_prime(prime)),
+                encode_request(0x0091, 1, encode_peristaltic_purge(purge)),
+                encode_request(0x00A3, 2, encode_shake(shake)),
+            ],
+        )
+        with MultiFloDriver(fake) as driver:
+            driver._motion_preflight = ReadOnlyDeviceInfo(
+                "14071419",
+                BasecodeVersionInfo("", "", "", "", "", "", "", b""),
+                InstalledModules(True, False, True, CassetteType.FIVE_UL),
+            )
+            driver.peristaltic_prime(prime)
+            driver.peristaltic_purge(purge)
+            driver.shake(shake)
+        fake.assert_script_consumed()
 
     def test_fragmented_success(self) -> None:
         packet = response(body=b"\x00\x00")

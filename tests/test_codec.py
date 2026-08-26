@@ -10,8 +10,18 @@ from multiflo.codec import (
     decode_frame,
     encode_request,
     encode_peristaltic_dispense,
+    encode_peristaltic_prime,
+    encode_peristaltic_purge,
+    encode_shake,
+    encode_soak,
 )
-from multiflo.models import PeristalticDispense
+from multiflo.models import (
+    PeristalticDispense,
+    PeristalticPrime,
+    PeristalticPurge,
+    Shake,
+    Soak,
+)
 from multiflo.errors import ProtocolError
 
 
@@ -37,6 +47,55 @@ class CodecTests(unittest.TestCase):
                 "05 64 00 01 00 00 00 A1 03 0A 00 02 "
                 "FF FF FF FF FF FF 00 01 00 00 00 00"
             ),
+        )
+
+    def test_calib3_partial_deep_well_golden_body(self) -> None:
+        step = PeristalticDispense(volume_ul=200, columns=(1,))
+        self.assertEqual(
+            encode_peristaltic_dispense(step),
+            bytes.fromhex(
+                "05 C8 00 01 00 00 00 A1 03 0A 00 02 "
+                "01 F0 FF FF FF FF 00 01 00 00 00 00"
+            ),
+        )
+
+    def test_calib4_standard_plate_high_flow_golden_body(self) -> None:
+        step = PeristalticDispense(
+            volume_ul=200,
+            plate_type="96_well",
+            flow_rate="high",
+            columns=(1,),
+        )
+        self.assertEqual(
+            encode_peristaltic_dispense(step),
+            bytes.fromhex(
+                "04 C8 00 02 00 00 00 50 01 0A 00 02 "
+                "01 00 00 00 00 00 00 01 00 00 00 00"
+            ),
+        )
+
+    def test_calib8_prime_golden_body(self) -> None:
+        self.assertEqual(
+            encode_peristaltic_prime(PeristalticPrime(volume_ul=3000)),
+            bytes.fromhex("04 B8 0B 00 00 01 01 00 01 00 00"),
+        )
+
+    def test_calib9_purge_golden_body(self) -> None:
+        self.assertEqual(
+            encode_peristaltic_purge(PeristalticPurge(volume_ul=2000)),
+            bytes.fromhex("04 D0 07 00 00 01 01 00 01 00 00"),
+        )
+
+    def test_calib10_shake_golden_body(self) -> None:
+        self.assertEqual(
+            encode_shake(Shake(duration_seconds=5)),
+            bytes.fromhex("04 01 05 00 03 00 00 00 00 00 00 00"),
+        )
+
+    def test_calib11_soak_golden_body(self) -> None:
+        self.assertEqual(
+            encode_soak(Soak(duration_seconds=30)),
+            bytes.fromhex("04 01 00 00 03 00 1E 00 00 00 00 00"),
         )
 
     def test_communication_test_golden_packet(self) -> None:
