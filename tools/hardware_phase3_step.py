@@ -99,6 +99,7 @@ def main() -> int:
     )
     parser.set_defaults(move_carrier_home=True)
     parser.add_argument("--read-timeout-ms", type=int, default=120_000)
+    parser.add_argument("--completion-timeout-seconds", type=float, default=600.0)
     parser.add_argument("--authorization", required=True)
     args = parser.parse_args()
 
@@ -111,6 +112,8 @@ def main() -> int:
         parser.error("--duration-seconds is required for shake and soak")
     if not 1_000 <= args.read_timeout_ms <= 300_000:
         parser.error("--read-timeout-ms must be between 1000 and 300000")
+    if not 1 <= args.completion_timeout_seconds <= 3600:
+        parser.error("--completion-timeout-seconds must be between 1 and 3600")
 
     step = _build_step(args)
     transport = D2xxTransport(
@@ -119,7 +122,11 @@ def main() -> int:
         config=D2xxConfig(read_timeout_ms=args.read_timeout_ms),
     )
     runner = ProtocolRunner(
-        MultiFloDriver(transport, expected_product_serial=args.expected_serial)
+        MultiFloDriver(
+            transport,
+            expected_product_serial=args.expected_serial,
+            completion_timeout_seconds=args.completion_timeout_seconds,
+        )
     )
     client = TestClient(create_app(runner))
     try:
@@ -135,7 +142,7 @@ def main() -> int:
         )
         response.raise_for_status()
         run = response.json()
-        deadline = time.monotonic() + (args.read_timeout_ms / 1000) + 30
+        deadline = time.monotonic() + args.completion_timeout_seconds + 30
         while run["state"] not in TERMINAL_STATES and time.monotonic() < deadline:
             time.sleep(0.1)
             polled = client.get(f"/v1/runs/{run['run_id']}")

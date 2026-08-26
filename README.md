@@ -19,11 +19,14 @@ uv run python -m multiflo.tools.hardware_inventory --expected-serial 14071419
 ```
 
 Read `phase_0.md`, `phase_1.md`, and `phase_2.md` before hardware work. The
-Phase 0 and Phase 1 procedures do not authorize motion; Phase 2 documents the
-only hardware-verified motion slice.
+Phase 0 and Phase 1 procedures do not authorize motion. Phase 3 verification is
+in progress; its guarded tool supports one explicitly authorized step at a time.
 
-Phase 2 implements only full-plate primary peristaltic dispensing to the proven
-96-deep-well geometry. Its API endpoints are:
+The currently implemented operation models are primary peristaltic dispense,
+prime, purge, shake, and soak. Motion preflight requires the read-only device
+program-step state to be `ready`. Each step uses the recovered Start Batch,
+status-polling, and End Batch lifecycle; an accepted command is not reported as
+complete until the device returns to `ready`. The API endpoints are:
 
 - `POST /v1/protocols/validate`
 - `POST /v1/runs`
@@ -39,3 +42,7 @@ physical checklist and exact dispense settings have been confirmed:
 ```powershell
 uv run python -m multiflo.tools.hardware_dispense --expected-serial 14071419 --cassette 5ul --volume-ul 100 --flow-rate medium --pre-dispense-volume-ul 10 --pre-dispense-cycles 2 --authorization CASSETTE_PLATE_TUBING_IDLE_CONFIRMED
 ```
+
+Phase 3 one-step hardware checks use `multiflo.tools.hardware_phase3_step` and
+an operation-specific authorization token. Never retry a run in
+`unknown_execution_state`; reconcile the instrument state first.

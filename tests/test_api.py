@@ -9,6 +9,7 @@ from multiflo.api import create_app
 from multiflo.codec import (
     Frame,
     MessageClass,
+    encode_batch_start,
     encode_peristaltic_dispense,
     encode_peristaltic_prime,
     encode_peristaltic_purge,
@@ -16,7 +17,7 @@ from multiflo.codec import (
     encode_shake,
     encode_soak,
 )
-from multiflo.driver import MultiFloDriver
+from multiflo.driver import MultiFloDriver, ProgramStepState
 from multiflo.models import (
     PeristalticDispense,
     PeristalticPrime,
@@ -32,12 +33,20 @@ def response(command: int, body: bytes = b"\x00\x00") -> bytes:
     return bytes((0x06,)) + Frame(MessageClass.REQUEST, 0, command, 0, 0, body).encode()
 
 
+def program_status_response(state: ProgramStepState) -> bytes:
+    return response(
+        0x0092,
+        b"\x00\x00" + int(state).to_bytes(2, "little") + b"\x00" * 4 + b"\x02",
+    )
+
+
 class ApiTests(unittest.TestCase):
     @staticmethod
     def _inventory_reads() -> list[bytes]:
         version = b"7210200" + b"1.12    " + b"ABFB" + b"61FF" + b"103  " + b"002" + b"003"
         return [
             response(0x0073),
+            program_status_response(ProgramStepState.READY),
             response(0x0100, b"\x00\x00" + b"14071419\x00"),
             response(0x00A0, b"\x00\x00" + version),
             response(0x0104, b"\x00\x00\x01"),
@@ -50,12 +59,13 @@ class ApiTests(unittest.TestCase):
     def _inventory_writes() -> list[bytes]:
         return [
             encode_request(0x0073, 0),
-            encode_request(0x0100, 1),
-            encode_request(0x00A0, 2),
-            encode_request(0x0104, 3, b"\x01"),
-            encode_request(0x0104, 4, b"\x02"),
-            encode_request(0x0154, 5),
-            encode_request(0x0108, 6, b"\x01"),
+            encode_request(0x0092, 1),
+            encode_request(0x0100, 2),
+            encode_request(0x00A0, 3),
+            encode_request(0x0104, 4, b"\x01"),
+            encode_request(0x0104, 5, b"\x02"),
+            encode_request(0x0154, 6),
+            encode_request(0x0108, 7, b"\x01"),
         ]
 
     def test_json_to_completed_dispense_and_polling(self) -> None:
@@ -64,27 +74,39 @@ class ApiTests(unittest.TestCase):
         fake = ScriptedFakeTransport(
             [
                 response(0x0073),
+                program_status_response(ProgramStepState.READY),
                 response(0x0100, b"\x00\x00" + b"14071419\x00"),
                 response(0x00A0, b"\x00\x00" + version),
                 response(0x0104, b"\x00\x00\x01"),
                 response(0x0104, b"\x00\x00\x00"),
                 response(0x0154, b"\x00\x00\x01"),
                 response(0x0108, b"\x00\x00\x02"),
+                response(0x008D),
                 response(0x008F),
+                program_status_response(ProgramStepState.READY),
+                response(0x008C),
             ],
             expected_writes=[
                 encode_request(0x0073, 0),
-                encode_request(0x0100, 1),
-                encode_request(0x00A0, 2),
-                encode_request(0x0104, 3, b"\x01"),
-                encode_request(0x0104, 4, b"\x02"),
-                encode_request(0x0154, 5),
-                encode_request(0x0108, 6, b"\x01"),
-                encode_request(0x008F, 7, encode_peristaltic_dispense(step)),
+                encode_request(0x0092, 1),
+                encode_request(0x0100, 2),
+                encode_request(0x00A0, 3),
+                encode_request(0x0104, 4, b"\x01"),
+                encode_request(0x0104, 5, b"\x02"),
+                encode_request(0x0154, 6),
+                encode_request(0x0108, 7, b"\x01"),
+                encode_request(0x008D, 8, encode_batch_start(step.plate_type)),
+                encode_request(0x008F, 9, encode_peristaltic_dispense(step)),
+                encode_request(0x0092, 10),
+                encode_request(0x008C, 11),
             ],
         )
         runner = ProtocolRunner(
-            MultiFloDriver(fake, expected_product_serial="14071419")
+            MultiFloDriver(
+                fake,
+                expected_product_serial="14071419",
+                completion_poll_interval_seconds=0,
+            )
         )
         try:
             client = TestClient(create_app(runner))
@@ -168,21 +190,49 @@ class ApiTests(unittest.TestCase):
         fake = ScriptedFakeTransport(
             self._inventory_reads()
             + [
+                response(0x008D),
                 response(0x0090),
+                program_status_response(ProgramStepState.READY),
+                response(0x008C),
+                response(0x008D),
                 response(0x0091),
+                program_status_response(ProgramStepState.READY),
+                response(0x008C),
+                response(0x008D),
                 response(0x00A3),
+                program_status_response(ProgramStepState.READY),
+                response(0x008C),
+                response(0x008D),
                 response(0x00A3),
+                program_status_response(ProgramStepState.READY),
+                response(0x008C),
             ],
             expected_writes=self._inventory_writes()
             + [
-                encode_request(0x0090, 7, encode_peristaltic_prime(steps[0])),
-                encode_request(0x0091, 8, encode_peristaltic_purge(steps[1])),
-                encode_request(0x00A3, 9, encode_shake(steps[2])),
-                encode_request(0x00A3, 10, encode_soak(steps[3])),
+                encode_request(0x008D, 8, encode_batch_start(steps[0].plate_type)),
+                encode_request(0x0090, 9, encode_peristaltic_prime(steps[0])),
+                encode_request(0x0092, 10),
+                encode_request(0x008C, 11),
+                encode_request(0x008D, 12, encode_batch_start(steps[1].plate_type)),
+                encode_request(0x0091, 13, encode_peristaltic_purge(steps[1])),
+                encode_request(0x0092, 14),
+                encode_request(0x008C, 15),
+                encode_request(0x008D, 16, encode_batch_start(steps[2].plate_type)),
+                encode_request(0x00A3, 17, encode_shake(steps[2])),
+                encode_request(0x0092, 18),
+                encode_request(0x008C, 19),
+                encode_request(0x008D, 20, encode_batch_start(steps[3].plate_type)),
+                encode_request(0x00A3, 21, encode_soak(steps[3])),
+                encode_request(0x0092, 22),
+                encode_request(0x008C, 23),
             ],
         )
         runner = ProtocolRunner(
-            MultiFloDriver(fake, expected_product_serial="14071419")
+            MultiFloDriver(
+                fake,
+                expected_product_serial="14071419",
+                completion_poll_interval_seconds=0,
+            )
         )
         try:
             client = TestClient(create_app(runner))

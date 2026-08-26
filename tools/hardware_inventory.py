@@ -21,13 +21,22 @@ def main() -> int:
         expected_description=args.expected_description,
         config=D2xxConfig(read_timeout_ms=2_000),
     )
+    exit_code = 0
     with MultiFloDriver(transport) as driver:
         driver.communication_test()
-        inventory = asdict(driver.inspect_device())
-        inventory["basecode"]["reserved"] = inventory["basecode"]["reserved"].hex(" ")
-        inventory["modules"]["primary_cassette"] = inventory["modules"][
-            "primary_cassette"
-        ].value
+        program_status = asdict(driver.query_program_step_status())
+        program_status["state"] = program_status["state"].name.lower()
+        if program_status["state"] == "ready":
+            inventory = asdict(driver.inspect_device())
+            inventory["basecode"]["reserved"] = inventory["basecode"]["reserved"].hex(" ")
+            inventory["modules"]["primary_cassette"] = inventory["modules"][
+                "primary_cassette"
+            ].value
+        else:
+            inventory = {
+                "inventory_skipped": "program-step state is not ready",
+            }
+            exit_code = 2
         inventory["ftdi"] = {
             "serial": transport.device_info.serial_number,
             "description": transport.device_info.description,
@@ -37,8 +46,9 @@ def main() -> int:
             "device_type": transport.device_info.device_type,
             "latency_timer_ms": transport.latency_timer_ms,
         }
+        inventory["program_step_status"] = program_status
     print(json.dumps(inventory, indent=2))
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

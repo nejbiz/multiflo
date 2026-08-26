@@ -184,6 +184,12 @@ def encode_soak(step: Soak) -> bytes:
     )
 
 
+def encode_batch_start(plate_type: PlateType) -> bytes:
+    """Encode the plate selector used by the recovered Start Batch command."""
+
+    return bytes((_PLATE_CODES[plate_type],))
+
+
 @dataclass(frozen=True, slots=True)
 class Header:
     message_class: int

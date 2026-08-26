@@ -6,7 +6,9 @@ param(
     [string] $TypeName,
 
     [Parameter(Mandatory = $true)]
-    [string[]] $MethodName
+    [string[]] $MethodName,
+
+    [string] $Signature
 )
 
 $assemblyDirectory = Split-Path -Parent $AssemblyPath
@@ -60,7 +62,7 @@ function Resolve-Token([string] $operandType, [int] $token) {
     }
 }
 
-function Dump-MethodIL([Reflection.MethodInfo] $method) {
+function Dump-MethodIL([Reflection.MethodBase] $method) {
     Write-Output "=== $($method.DeclaringType.FullName)::$method ==="
     $body = $method.GetMethodBody()
     if (-not $body) {
@@ -149,12 +151,28 @@ function Dump-MethodIL([Reflection.MethodInfo] $method) {
 }
 
 $type = $types | Where-Object FullName -eq $TypeName
-if (-not $type) {
+if (-not $type -and $TypeName -ne '<Module>') {
     throw "Type not found: $TypeName"
 }
 
 foreach ($name in $MethodName) {
-    $type.GetMethods([Reflection.BindingFlags]'Public,NonPublic,Static,Instance,DeclaredOnly') |
-        Where-Object Name -eq $name |
-        ForEach-Object { Dump-MethodIL $_ }
+    if ($TypeName -eq '<Module>') {
+        $module.GetMethods([Reflection.BindingFlags]'Public,NonPublic,Static') |
+            Where-Object Name -eq $name |
+            Where-Object { -not $Signature -or $_.ToString() -eq $Signature } |
+            ForEach-Object { Dump-MethodIL $_ }
+    }
+    elseif ($name -eq '.ctor' -or $name -eq '.cctor') {
+        $type.GetConstructors(
+            [Reflection.BindingFlags]'Public,NonPublic,Static,Instance,DeclaredOnly'
+        ) |
+            Where-Object Name -eq $name |
+            ForEach-Object { Dump-MethodIL $_ }
+    }
+    else {
+        $type.GetMethods([Reflection.BindingFlags]'Public,NonPublic,Static,Instance,DeclaredOnly') |
+            Where-Object Name -eq $name |
+            Where-Object { -not $Signature -or $_.ToString() -eq $Signature } |
+            ForEach-Object { Dump-MethodIL $_ }
+    }
 }

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import IntEnum
 from threading import Lock
+import time
 
 from .codec import (
     Endpoint,
@@ -13,6 +15,7 @@ from .codec import (
     MessageClass,
     decode_frame,
     decode_header,
+    encode_batch_start,
     encode_peristaltic_dispense,
     encode_peristaltic_prime,
     encode_peristaltic_purge,
@@ -27,6 +30,7 @@ from .models import (
     PeristalticDispense,
     PeristalticPrime,
     PeristalticPurge,
+    PlateType,
     Shake,
     Soak,
     validate_volume_for_cassette,
@@ -38,6 +42,9 @@ COMMUNICATION_TEST = 0x0073
 PERISTALTIC_DISPENSE = 0x008F
 PERISTALTIC_PRIME = 0x0090
 PERISTALTIC_PURGE = 0x0091
+END_BATCH = 0x008C
+START_BATCH = 0x008D
+PROGRAM_STEP_STATUS = 0x0092
 SHAKE_SOAK = 0x00A3
 ACK = 0x06
 NAK = 0x15
@@ -76,6 +83,23 @@ class ReadOnlyDeviceInfo:
     modules: InstalledModules
 
 
+class ProgramStepState(IntEnum):
+    """States returned by the recovered 0x0092 Program Step Status query."""
+
+    READY = 1
+    BUSY = 2
+    PAUSED = 3
+    ERROR = 4
+    STOPPED = 5
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramStepStatus:
+    state: ProgramStepState
+    error_code: int
+    error_source: int
+
+
 class MultiFloDriver:
     """Serialize request/response exchanges over one owned transport."""
 
@@ -85,10 +109,18 @@ class MultiFloDriver:
         *,
         expected_product_serial: str | None = None,
         max_body_length: int = MAX_BODY_LENGTH,
+        completion_timeout_seconds: float = 600.0,
+        completion_poll_interval_seconds: float = 0.5,
     ) -> None:
         self.transport = transport
         self.expected_product_serial = expected_product_serial
         self.max_body_length = max_body_length
+        if completion_timeout_seconds <= 0:
+            raise ValueError("completion timeout must be positive")
+        if completion_poll_interval_seconds < 0:
+            raise ValueError("completion poll interval cannot be negative")
+        self.completion_timeout_seconds = completion_timeout_seconds
+        self.completion_poll_interval_seconds = completion_poll_interval_seconds
         self._next_message_id = 0
         self._exchange_lock = Lock()
         self._is_open = False
@@ -180,6 +212,27 @@ class MultiFloDriver:
             ),
         )
 
+    def query_program_step_status(self) -> ProgramStepStatus:
+        """Read the authoritative device-side program-step state."""
+
+        data = self._read_only_data(PROGRAM_STEP_STATUS)
+        if len(data) != 7:
+            raise ProtocolError(
+                "program-step-status response must contain seven data bytes"
+            )
+        state_code = int.from_bytes(data[0:2], "little")
+        try:
+            state = ProgramStepState(state_code)
+        except ValueError as error:
+            raise ProtocolError(
+                f"instrument returned unknown program-step state {state_code}"
+            ) from error
+        return ProgramStepStatus(
+            state=state,
+            error_code=int.from_bytes(data[2:6], "little"),
+            error_source=data[6],
+        )
+
     def authorize_motion(self, *, operator_confirmed_idle: bool) -> None:
         """Record an operator's per-run idle/setup confirmation.
 
@@ -199,6 +252,11 @@ class MultiFloDriver:
         if not self.expected_product_serial:
             raise ProtocolError("an expected product serial is required for motion")
         self.communication_test()
+        status = self.query_program_step_status()
+        if status.state is not ProgramStepState.READY:
+            raise ProtocolError(
+                f"instrument program-step state is {status.state.name.lower()}, not ready"
+            )
         info = self.inspect_device()
         if info.product_serial_number != self.expected_product_serial:
             raise ProtocolError(
@@ -220,23 +278,32 @@ class MultiFloDriver:
         return self._motion_exchange(
             PERISTALTIC_DISPENSE,
             encode_peristaltic_dispense(step),
+            step.plate_type,
         )
 
     def peristaltic_prime(self, step: PeristalticPrime) -> ExchangeResult:
         self._check_peristaltic_cassette(step.cassette_type)
-        return self._motion_exchange(PERISTALTIC_PRIME, encode_peristaltic_prime(step))
+        return self._motion_exchange(
+            PERISTALTIC_PRIME,
+            encode_peristaltic_prime(step),
+            step.plate_type,
+        )
 
     def peristaltic_purge(self, step: PeristalticPurge) -> ExchangeResult:
         self._check_peristaltic_cassette(step.cassette_type)
-        return self._motion_exchange(PERISTALTIC_PURGE, encode_peristaltic_purge(step))
+        return self._motion_exchange(
+            PERISTALTIC_PURGE,
+            encode_peristaltic_purge(step),
+            step.plate_type,
+        )
 
     def shake(self, step: Shake) -> ExchangeResult:
         self._require_motion_preflight()
-        return self._motion_exchange(SHAKE_SOAK, encode_shake(step))
+        return self._motion_exchange(SHAKE_SOAK, encode_shake(step), step.plate_type)
 
     def soak(self, step: Soak) -> ExchangeResult:
         self._require_motion_preflight()
-        return self._motion_exchange(SHAKE_SOAK, encode_soak(step))
+        return self._motion_exchange(SHAKE_SOAK, encode_soak(step), step.plate_type)
 
     def _require_motion_preflight(self) -> ReadOnlyDeviceInfo:
         if self._motion_preflight is None:
@@ -257,10 +324,20 @@ class MultiFloDriver:
             )
         return installed
 
-    def _motion_exchange(self, command_id: int, body: bytes) -> ExchangeResult:
+    def _motion_exchange(
+        self,
+        command_id: int,
+        body: bytes,
+        plate_type: PlateType,
+    ) -> ExchangeResult:
         try:
+            start = self._exchange(START_BATCH, encode_batch_start(plate_type))
+            self._response_data(START_BATCH, start.response.body)
             result = self._exchange(command_id, body)
             self._response_data(command_id, result.response.body)
+            self._wait_for_program_step_ready(command_id)
+            end = self._exchange(END_BATCH)
+            self._response_data(END_BATCH, end.response.body)
             return result
         except DeviceError:
             raise
@@ -268,9 +345,30 @@ class MultiFloDriver:
             self._operator_confirmed_idle = False
             self._motion_preflight = None
             raise UnknownExecutionState(
-                f"communication failed after motion command 0x{command_id:04x} was sent; "
-                "do not retry automatically"
+                f"communication failed after the batch/step sequence for motion command "
+                f"0x{command_id:04x} began; do not retry automatically"
             ) from error
+
+    def _wait_for_program_step_ready(self, command_id: int) -> None:
+        deadline = time.monotonic() + self.completion_timeout_seconds
+        while True:
+            status = self.query_program_step_status()
+            if status.state is ProgramStepState.READY:
+                return
+            if status.state is ProgramStepState.ERROR:
+                raise DeviceError(
+                    f"motion command 0x{command_id:04x} entered error state "
+                    f"0x{status.error_code:08x} (source {status.error_source})"
+                )
+            if status.state is ProgramStepState.STOPPED:
+                raise DeviceError(
+                    f"motion command 0x{command_id:04x} was stopped by the instrument"
+                )
+            if time.monotonic() >= deadline:
+                raise TransportError(
+                    f"timed out waiting for motion command 0x{command_id:04x} to finish"
+                )
+            time.sleep(self.completion_poll_interval_seconds)
 
     def _read_only_data(self, command_id: int, body: bytes = b"") -> bytes:
         result = self._exchange(command_id, body)

@@ -8,6 +8,7 @@ from multiflo.codec import (
     FrameStreamDecoder,
     MessageClass,
     decode_frame,
+    encode_batch_start,
     encode_request,
     encode_peristaltic_dispense,
     encode_peristaltic_prime,
@@ -21,6 +22,7 @@ from multiflo.models import (
     PeristalticPurge,
     Shake,
     Soak,
+    PlateType,
 )
 from multiflo.errors import ProtocolError
 
@@ -33,6 +35,10 @@ DISPENSE_PACKET = bytes.fromhex(
 
 
 class CodecTests(unittest.TestCase):
+    def test_start_batch_plate_selector(self) -> None:
+        self.assertEqual(encode_batch_start(PlateType.WELL_96), b"\x04")
+        self.assertEqual(encode_batch_start(PlateType.DEEP_WELL_96), b"\x05")
+
     def test_calib1_peristaltic_dispense_golden_packet(self) -> None:
         step = PeristalticDispense(volume_ul=100)
         body = bytes.fromhex(

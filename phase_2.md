@@ -2,6 +2,21 @@
 
 Date: 2026-08-26 (Europe/Zurich)
 
+## Phase 3 safety correction
+
+Later Phase 3 analysis and a live five-second shake test proved that the
+zero-status response to a step command means **accepted**, not mechanically
+complete. LHC actually sends Start Batch (`0x008D`), polls Program Step Status
+(`0x0092`) every 500 ms until the device returns `Ready`, and then sends End
+Batch (`0x008C`). The original Phase 2 driver omitted that lifecycle.
+
+Accordingly, the Phase 2 hardware record below proves that the dispense request
+was accepted by serial `14071419`; it does not independently prove final
+mechanical completion. The current driver blocks motion unless `0x0092` reports
+`Ready` and does not mark an accepted step complete until the recovered status
+lifecycle finishes. Treat the older completion language below as historical and
+superseded by this correction.
+
 ## Outcome
 
 Phase 2 implements and hardware-verifies one narrow operation: a full-plate
