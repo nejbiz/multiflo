@@ -162,6 +162,22 @@ class CodecTests(unittest.TestCase):
             bytes.fromhex("01 B8 0B 00 00 02 01 01 01 00 00"),
         )
 
+    def test_calib25_384_well_odd_rows_golden_body(self) -> None:
+        step = PeristalticDispense(
+            volume_ul=10,
+            plate_type="384_well",
+            flow_rate="high",
+            cassette_type="1ul",
+            row_sections="odd",
+        )
+        self.assertEqual(
+            encode_peristaltic_dispense(step),
+            bytes.fromhex(
+                "01 0A 00 02 01 00 00 4D 01 0A 00 02 "
+                "FF FF FF FF FF FF 02 01 00 00 00 00"
+            ),
+        )
+
     def test_communication_test_golden_packet(self) -> None:
         self.assertEqual(encode_request(0x0073), COMMUNICATION_TEST_PACKET)
 

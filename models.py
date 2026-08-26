@@ -74,6 +74,7 @@ class PeristalticDispense(BaseModel):
     pre_dispense_volume_ul: int = Field(default=10, ge=0, le=3000)
     pre_dispense_cycles: int = Field(default=2, ge=0, le=255)
     columns: Literal["all"] | tuple[int, ...] = "all"
+    row_sections: Literal["all", "odd"] = "all"
 
     @model_validator(mode="after")
     def validate_dispense(self) -> "PeristalticDispense":
@@ -98,6 +99,11 @@ class PeristalticDispense(BaseModel):
                 raise ValueError("96-well columns must be between 1 and 12")
             if len(set(self.columns)) != len(self.columns):
                 raise ValueError("dispense columns must be unique")
+        if (
+            self.row_sections != "all"
+            and self.plate_type is not PlateType.WELL_384
+        ):
+            raise ValueError("row-section selection is supported only for 384-well plates")
         return self
 
 

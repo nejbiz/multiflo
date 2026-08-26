@@ -39,6 +39,12 @@ _DISPENSE_HEIGHTS = {
     PlateType.DEEP_WELL_96: 929,
 }
 _FLOW_CODES = {FlowRate.LOW: 0, FlowRate.MEDIUM: 1, FlowRate.HIGH: 2}
+_ROW_SKIP_MASKS = {
+    "all": 0x00,
+    # calib25's 1011 LHC map skips the second section. The operator manual
+    # identifies the first 384-well section as odd rows and the second as even.
+    "odd": 0x02,
+}
 
 
 class MessageClass(IntEnum):
@@ -120,7 +126,7 @@ def encode_peristaltic_dispense(step: PeristalticDispense) -> bytes:
         step.pre_dispense_volume_ul,
         step.pre_dispense_cycles,
         position_map,
-        0,  # Inverted row-skip mask: skip no rows.
+        _ROW_SKIP_MASKS[step.row_sections],
         1,  # Primary peristaltic pump.
         b"\x00" * 4,
     )

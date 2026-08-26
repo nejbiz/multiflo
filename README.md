@@ -28,9 +28,10 @@ program-step state to be `ready`. Each step uses the recovered Start Batch,
 status-polling, and End Batch lifecycle; an accepted command is not reported as
 complete until the device returns to `ready`. The API endpoints are:
 
-Offline fixture coverage includes full-map 384-well primary peristaltic
-dispense and prime. Partial 384-well maps remain blocked until a controlled
-fixture proves their bit layout. The driver verifies cassette compatibility but
+Offline fixture coverage includes full-column-map 384-well primary peristaltic
+dispense and prime, plus the calib25 odd-row-section dispense. Partial 384-well
+column maps and even-only row-section selection remain blocked until controlled
+fixtures prove their bit layout. The driver verifies cassette compatibility but
 never changes the instrument's cassette setting automatically.
 
 - `POST /v1/protocols/validate`

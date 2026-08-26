@@ -163,7 +163,7 @@ class ApiTests(unittest.TestCase):
         finally:
             runner.shutdown()
 
-    def test_calib23_384_step_validates_without_opening_transport(self) -> None:
+    def test_calib25_384_odd_rows_validates_without_opening_transport(self) -> None:
         fake = ScriptedFakeTransport()
         runner = ProtocolRunner(MultiFloDriver(fake, expected_product_serial="14071419"))
         try:
@@ -171,22 +171,23 @@ class ApiTests(unittest.TestCase):
             result = client.post(
                 "/v1/protocols/validate",
                 json={
-                    "name": "calib23",
+                    "name": "calib25",
                     "steps": [
                         {
                             "operation": "peristaltic_dispense",
                             "plate_type": "384_well",
-                            "volume_ul": 1,
-                            "flow_rate": "low",
+                            "volume_ul": 10,
+                            "flow_rate": "high",
                             "cassette_type": "1ul",
+                            "row_sections": "odd",
                         }
                     ],
                 },
             )
             self.assertEqual(result.status_code, 200)
             self.assertEqual(
-                result.json()["protocol"]["steps"][0]["plate_type"],
-                "384_well",
+                result.json()["protocol"]["steps"][0]["row_sections"],
+                "odd",
             )
             self.assertFalse(fake.is_open)
             self.assertEqual(fake.writes, [])

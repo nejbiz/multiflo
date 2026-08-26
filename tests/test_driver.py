@@ -187,12 +187,13 @@ class DriverTests(unittest.TestCase):
             driver.shake(shake)
         fake.assert_script_consumed()
 
-    def test_calib23_384_dispense_uses_recovered_batch_and_body(self) -> None:
+    def test_calib25_384_odd_rows_uses_recovered_batch_and_body(self) -> None:
         step = PeristalticDispense(
-            volume_ul=1,
+            volume_ul=10,
             plate_type="384_well",
-            flow_rate="low",
+            flow_rate="high",
             cassette_type="1ul",
+            row_sections="odd",
         )
         fake = ScriptedFakeTransport(
             [

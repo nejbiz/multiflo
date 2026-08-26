@@ -57,6 +57,27 @@ class ModelTests(unittest.TestCase):
                 columns=(1,),
             )
 
+    def test_calib25_odd_row_section_is_limited_to_384_well_plates(self) -> None:
+        step = PeristalticDispense(
+            volume_ul=10,
+            plate_type="384_well",
+            flow_rate="high",
+            cassette_type="1ul",
+            row_sections="odd",
+        )
+        self.assertEqual(step.row_sections, "odd")
+
+        with self.assertRaisesRegex(ValidationError, "only for 384-well"):
+            PeristalticDispense(volume_ul=10, row_sections="odd")
+
+    def test_even_row_section_waits_for_a_fixture(self) -> None:
+        with self.assertRaises(ValidationError):
+            PeristalticDispense(
+                volume_ul=10,
+                plate_type="384_well",
+                row_sections="even",
+            )
+
     def test_protocol_discriminates_phase3_steps(self) -> None:
         protocol = Protocol.model_validate(
             {
