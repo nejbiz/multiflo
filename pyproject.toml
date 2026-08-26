@@ -1,0 +1,18 @@
+[project]
+name = "multiflo"
+version = "0.1.0"
+description = "Pure Python driver for the base BioTek MultiFlo"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["multiflo"]
+package-dir = { multiflo = "." }
+
+[tool.uv]
+package = true
