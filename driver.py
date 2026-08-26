@@ -100,6 +100,13 @@ class ProgramStepStatus:
     error_source: int
 
 
+@dataclass(frozen=True, slots=True)
+class BatchRecoveryResult:
+    before: ProgramStepStatus
+    end_batch: ExchangeResult
+    after: ProgramStepStatus
+
+
 class MultiFloDriver:
     """Serialize request/response exchanges over one owned transport."""
 
@@ -232,6 +239,42 @@ class MultiFloDriver:
             error_code=int.from_bytes(data[2:6], "little"),
             error_source=data[6],
         )
+
+    def recover_end_batch(
+        self,
+        *,
+        operator_confirmed_stationary: bool,
+    ) -> BatchRecoveryResult:
+        """Send one guarded End Batch to recover a stale Busy state.
+
+        This is a recovery action, not a normal motion path. It deliberately
+        refuses any initial state other than Busy and never retries.
+        """
+
+        if not operator_confirmed_stationary:
+            raise ProtocolError("stationary recovery confirmation is required")
+        before = self.query_program_step_status()
+        if before.state is not ProgramStepState.BUSY:
+            raise ProtocolError(
+                f"End Batch recovery requires busy state, got "
+                f"{before.state.name.lower()}"
+            )
+        try:
+            end_batch = self._exchange(END_BATCH)
+            self._response_data(END_BATCH, end_batch.response.body)
+            after = self.query_program_step_status()
+        except DeviceError:
+            raise
+        except (TransportError, ProtocolError) as error:
+            raise UnknownExecutionState(
+                "communication failed after End Batch recovery was sent; "
+                "do not retry automatically"
+            ) from error
+        if after.state is not ProgramStepState.READY:
+            raise DeviceError(
+                f"End Batch recovery returned {after.state.name.lower()}, not ready"
+            )
+        return BatchRecoveryResult(before, end_batch, after)
 
     def authorize_motion(self, *, operator_confirmed_idle: bool) -> None:
         """Record an operator's per-run idle/setup confirmation.

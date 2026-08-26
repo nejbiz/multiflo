@@ -220,6 +220,34 @@ class DriverTests(unittest.TestCase):
             with self.assertRaisesRegex(ProtocolError, "busy, not ready"):
                 driver.prepare_motion()
 
+    def test_end_batch_recovery_is_busy_only_and_sent_once(self) -> None:
+        fake = ScriptedFakeTransport(
+            [
+                program_status_response(ProgramStepState.BUSY),
+                response(0x008C),
+                program_status_response(ProgramStepState.READY, error_source=0),
+            ],
+            expected_writes=[
+                encode_request(0x0092, 0),
+                encode_request(0x008C, 1),
+                encode_request(0x0092, 2),
+            ],
+        )
+        with MultiFloDriver(fake) as driver:
+            recovered = driver.recover_end_batch(operator_confirmed_stationary=True)
+        self.assertEqual(recovered.before.state, ProgramStepState.BUSY)
+        self.assertEqual(recovered.after.state, ProgramStepState.READY)
+        fake.assert_script_consumed()
+
+        ready_fake = ScriptedFakeTransport(
+            [program_status_response(ProgramStepState.READY)],
+            expected_writes=[encode_request(0x0092, 0)],
+        )
+        with MultiFloDriver(ready_fake) as driver:
+            with self.assertRaisesRegex(ProtocolError, "requires busy state"):
+                driver.recover_end_batch(operator_confirmed_stationary=True)
+        ready_fake.assert_script_consumed()
+
     def test_fragmented_success(self) -> None:
         packet = response(body=b"\x00\x00")
         fake = ScriptedFakeTransport(

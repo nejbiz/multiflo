@@ -1,7 +1,12 @@
 """Pure Python support for the base BioTek MultiFlo."""
 
 from .codec import Frame, MessageClass, decode_frame, encode_request
-from .driver import MultiFloDriver, ProgramStepState, ProgramStepStatus
+from .driver import (
+    BatchRecoveryResult,
+    MultiFloDriver,
+    ProgramStepState,
+    ProgramStepStatus,
+)
 from .models import (
     PeristalticDispense,
     PeristalticPrime,
@@ -14,6 +19,7 @@ from .runner import ProtocolRunner, RunState, RunStatus
 
 __all__ = [
     "Frame",
+    "BatchRecoveryResult",
     "MessageClass",
     "MultiFloDriver",
     "PeristalticDispense",
