@@ -18,9 +18,9 @@ uv run python -m multiflo.tools.hardware_smoke --expected-serial 14071419
 uv run python -m multiflo.tools.hardware_inventory --expected-serial 14071419
 ```
 
-Read `phase_0.md`, `phase_1.md`, and `phase_2.md` before hardware work. The
-Phase 0 and Phase 1 procedures do not authorize motion. Phase 3 verification is
-in progress; its guarded tool supports one explicitly authorized step at a time.
+Read `phase_0.md`, `phase_1.md`, `phase_2.md`, and `phase_3.md` before hardware
+work. The Phase 0 and Phase 1 procedures do not authorize motion. The Phase 3
+guarded tool supports one explicitly authorized step at a time.
 
 The currently implemented operation models are primary peristaltic dispense,
 prime, purge, shake, and soak. Motion preflight requires the read-only device
