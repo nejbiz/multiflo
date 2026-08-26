@@ -78,6 +78,27 @@ class ModelTests(unittest.TestCase):
                 row_sections="even",
             )
 
+    def test_xy_offsets_are_cassette_independent_and_manual_bounded(self) -> None:
+        for cassette_type in ("any", "1ul", "5ul", "10ul"):
+            with self.subTest(cassette_type=cassette_type):
+                step = PeristalticDispense(
+                    volume_ul=10,
+                    cassette_type=cassette_type,
+                    x_offset_steps=19,
+                    y_offset_steps=-6,
+                )
+                self.assertEqual((step.x_offset_steps, step.y_offset_steps), (19, -6))
+
+        for field, value in (
+            ("x_offset_steps", -61),
+            ("x_offset_steps", 61),
+            ("y_offset_steps", -41),
+            ("y_offset_steps", 41),
+        ):
+            with self.subTest(field=field, value=value):
+                with self.assertRaises(ValidationError):
+                    PeristalticDispense(volume_ul=10, **{field: value})
+
     def test_protocol_discriminates_phase3_steps(self) -> None:
         protocol = Protocol.model_validate(
             {

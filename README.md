@@ -34,6 +34,12 @@ column maps and even-only row-section selection remain blocked until controlled
 fixtures prove their bit layout. The driver verifies cassette compatibility but
 never changes the instrument's cassette setting automatically.
 
+Every peristaltic dispense supports signed fine-positioning offsets in instrument
+steps. `x_offset_steps` is limited to -60 (left) through 60 (right), and
+`y_offset_steps` is limited to -40 (back) through 40 (forward), matching the
+operator manual. Both default to centered (`0`) and are independent of cassette
+type.
+
 - `POST /v1/protocols/validate`
 - `POST /v1/runs`
 - `GET /v1/runs/{run_id}`

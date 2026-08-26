@@ -178,6 +178,33 @@ class CodecTests(unittest.TestCase):
             ),
         )
 
+    def test_calib26_through_29_xy_offset_golden_bodies(self) -> None:
+        fixtures = {
+            "calib26": (19, 0, "13 00"),
+            "calib27": (-19, 0, "ED 00"),
+            "calib28": (-19, 6, "ED 06"),
+            "calib29": (-19, -6, "ED FA"),
+        }
+        for name, (x_offset, y_offset, encoded_offsets) in fixtures.items():
+            with self.subTest(name=name):
+                step = PeristalticDispense(
+                    volume_ul=10,
+                    plate_type="384_well",
+                    flow_rate="high",
+                    cassette_type="1ul",
+                    row_sections="odd",
+                    x_offset_steps=x_offset,
+                    y_offset_steps=y_offset,
+                )
+                self.assertEqual(
+                    encode_peristaltic_dispense(step),
+                    bytes.fromhex(
+                        "01 0A 00 02 01 "
+                        f"{encoded_offsets} "
+                        "4D 01 0A 00 02 FF FF FF FF FF FF 02 01 00 00 00 00"
+                    ),
+                )
+
     def test_communication_test_golden_packet(self) -> None:
         self.assertEqual(encode_request(0x0073), COMMUNICATION_TEST_PACKET)
 

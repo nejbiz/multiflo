@@ -120,8 +120,8 @@ def encode_peristaltic_dispense(step: PeristalticDispense) -> bytes:
         step.volume_ul,
         _FLOW_CODES[step.flow_rate],
         CASSETTE_CODES[step.cassette_type],
-        0,  # Horizontal X offset.
-        0,  # Horizontal Y offset.
+        step.x_offset_steps,
+        step.y_offset_steps,
         _DISPENSE_HEIGHTS[step.plate_type],
         step.pre_dispense_volume_ul,
         step.pre_dispense_cycles,

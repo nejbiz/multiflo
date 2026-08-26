@@ -22,12 +22,15 @@ calib22 | dispense 750 ul, high flow, required 10 uL cassette
 calib23 | dispense 1 ul, low  flow,  384 well plate, required 1 uL cassette
 calib24 | prime 3000ul, hihg flow, 384 plat, 1ul required cassette
 calib25 | dispense 10ul, high flow, 384 plate, 1ul cassette required, odd rows only
+calib26 | dispense 10ul, high flow, 384 plate, 1ul cassette required, not all rows, 19 steps (0.87) right of center (one step = 0.05mm)
+calib27 | dispense 10ul, high flow, 384 plate, 1ul cassette required, not all rows, 19 steps (0.87) left of center
+calib28 | dispense 10ul, high flow, 384 plate, 1ul cassette required, not all rows, 19 steps (0.87) left of center, 6 steps (0.44mm) front of center
+calib29 | dispense 10ul, high flow, 384 plate, 1ul cassette required, not all rows, 19 steps (0.87) left of center, 6 steps (0.44mm) back of center
+calib30 |
 
-Integration note: calib21 is retained as evidence but rejected by the driver.
-Its 750 uL dispense exceeds the operator-manual 1-50 uL range for a required
-1 uL cassette. The cassette requirement fields in calib20-calib25 are treated
-as requirements to verify, never as authorization to change the onboard setting.
-Calib25's LHC row map is `1011`, encoded as inverted row-skip mask `0x02`.
-Together with the operator manual's odd-then-even 384-well processing order,
-this proves the driver's `row_sections: "odd"` option. Even-only row selection
-and partial 384-well column maps remain blocked pending controlled fixtures.
+Integration note: calib26-calib29 prove the signed horizontal position fields.
+Positive X moves right and negative X moves left; positive Y moves forward and
+negative Y moves back. The driver exposes these as `x_offset_steps` (-60..60)
+and `y_offset_steps` (-40..40) for every peristaltic dispense, independent of
+cassette type. Both default to zero. The limits come from the operator manual.
+These offset fixtures were integrated offline and were not run on hardware.

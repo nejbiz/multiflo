@@ -19,10 +19,13 @@ class HardwarePhase3ToolTests(unittest.TestCase):
                 pre_dispense_cycles=2,
                 columns="all",
                 row_sections="odd",
+                x_offset_steps=-19,
+                y_offset_steps=6,
             )
         )
 
         self.assertEqual(step.row_sections, "odd")
+        self.assertEqual((step.x_offset_steps, step.y_offset_steps), (-19, 6))
         self.assertEqual(step.model_dump(mode="json")["plate_type"], "384_well")
 
 

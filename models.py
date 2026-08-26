@@ -75,6 +75,8 @@ class PeristalticDispense(BaseModel):
     pre_dispense_cycles: int = Field(default=2, ge=0, le=255)
     columns: Literal["all"] | tuple[int, ...] = "all"
     row_sections: Literal["all", "odd"] = "all"
+    x_offset_steps: int = Field(default=0, ge=-60, le=60)
+    y_offset_steps: int = Field(default=0, ge=-40, le=40)
 
     @model_validator(mode="after")
     def validate_dispense(self) -> "PeristalticDispense":
