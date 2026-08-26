@@ -105,9 +105,9 @@ FTDI latency timer:          16 ms (observed, unchanged)
 
 ## Remaining safety gates
 
-Phase 1 meets its hardware completion criterion: exact device selection and repeated read-only communication succeed. Two items remain deliberately unresolved before Phase 2 motion:
+Phase 1 meets its hardware completion criterion: exact device selection and repeated read-only communication succeed. One safety item remains unresolved before Phase 2 motion:
 
 1. No authoritative read-only busy/idle command has been verified. LHC's `GetProgramStepStatus` is event-backed local state, not a device query. Phase 2 must establish safe startup reconciliation before enabling `0x008F`.
-2. The primary cassette calibration is operator-confirmed from its manufacturer certificate. Its certificate identifier/date remain optional documentation fields; there is no syringe manifold to calibrate.
+The primary cassette calibration is operator-confirmed from its manufacturer certificate. Its certificate identifier/date remain optional documentation fields; there is no syringe manifold to calibrate.
 
-Until both gates are handled, the implemented hardware tools remain read-only and the known dispense packet remains fixture-only.
+Until the busy/idle reconciliation gate is handled, the implemented hardware tools remain read-only and the known dispense packet remains fixture-only.
