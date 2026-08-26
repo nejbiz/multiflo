@@ -6,6 +6,7 @@ from collections import deque
 from dataclasses import dataclass
 import ctypes
 import os
+import sys
 from pathlib import Path
 from typing import Deque, Iterable, Protocol, runtime_checkable
 
@@ -74,15 +75,38 @@ class ByteTransport(Protocol):
     def write(self, data: bytes) -> None: ...
 
 
+def _default_d2xx_library_name() -> str:
+    """Return the platform's native D2XX shared-library file name.
+
+    The D2XX C API is identical across platforms; only the loader and the
+    library file name differ. Windows ships `ftd2xx.dll`; FTDI's Linux release
+    ships `libftd2xx.so` (RevPi/ARM included). macOS is `libftd2xx.dylib`.
+    """
+
+    if os.name == "nt":
+        return "ftd2xx.dll"
+    if sys.platform == "darwin":
+        return "libftd2xx.dylib"
+    return "libftd2xx.so"
+
+
 class _D2xxLibrary:
     def __init__(self, library_path: str | os.PathLike[str] | None = None) -> None:
-        if os.name != "nt" or not hasattr(ctypes, "WinDLL"):
-            raise TransportError("FTDI D2XX transport is currently supported on Windows")
-        path = str(library_path) if library_path else "ftd2xx.dll"
+        path = str(library_path) if library_path else _default_d2xx_library_name()
         try:
-            self.dll = ctypes.WinDLL(path)
+            if os.name == "nt":
+                if not hasattr(ctypes, "WinDLL"):
+                    raise TransportError("WinDLL is unavailable on this interpreter")
+                self.dll = ctypes.WinDLL(path)
+            else:
+                # Linux/macOS D2XX exports the same cdecl FT_* API via CDLL.
+                self.dll = ctypes.CDLL(path)
         except OSError as exc:
-            raise TransportError(f"cannot load native D2XX library {path!r}: {exc}") from exc
+            raise TransportError(
+                f"cannot load native D2XX library {path!r}: {exc}. On Linux install "
+                "FTDI's libftd2xx and ensure the ftdi_sio kernel module is not "
+                "holding the device."
+            ) from exc
         self._declare_functions()
 
     def _declare_functions(self) -> None:
@@ -339,6 +363,125 @@ class D2xxTransport:
         return self._handle
 
     def __enter__(self) -> "D2xxTransport":
+        self.open()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.close()
+
+
+@dataclass(frozen=True, slots=True)
+class SerialConfig:
+    """8-N-2, no flow control, DTR+RTS asserted, matching the D2XX defaults."""
+
+    baud_rate: int = 38_400
+    read_timeout_seconds: float = 3.0
+    write_timeout_seconds: float = 3.0
+    assert_dtr: bool = True
+    assert_rts: bool = True
+
+
+class SerialByteTransport:
+    """Raw byte transport over an FTDI virtual COM port (Linux `/dev/ttyUSB*`).
+
+    The base MultiFlo framing is transport-agnostic, so the driver runs
+    unchanged over either D2XX or a raw serial port. This path is used on the
+    RevPi, where the FT232 is exposed by the `ftdi_sio` kernel driver. Device
+    selection still relies on the in-band product-serial check the driver
+    performs before any motion; this class only moves bytes.
+
+    Timeout parity with D2XX is deliberate: a zero-byte (timed-out) read raises
+    `TransportError` rather than returning an empty buffer, so the driver's
+    disconnect/uncertain-state logic behaves the same as over D2XX.
+    """
+
+    def __init__(
+        self,
+        port: str,
+        *,
+        config: SerialConfig = SerialConfig(),
+    ) -> None:
+        if not port:
+            raise ValidationError("a serial port path is required")
+        self.port = port
+        self.config = config
+        self._serial: object | None = None
+
+    @property
+    def is_open(self) -> bool:
+        serial = self._serial
+        return bool(serial is not None and getattr(serial, "is_open", False))
+
+    def open(self) -> None:
+        if self.is_open:
+            return
+        try:
+            import serial  # Imported lazily so non-serial hosts need no pyserial.
+        except ImportError as exc:  # pragma: no cover - environment dependent
+            raise TransportError(
+                "pyserial is required for SerialByteTransport; install pyserial"
+            ) from exc
+        try:
+            handle = serial.Serial(
+                port=self.port,
+                baudrate=self.config.baud_rate,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_TWO,
+                timeout=self.config.read_timeout_seconds,
+                write_timeout=self.config.write_timeout_seconds,
+                rtscts=False,
+                dsrdtr=False,
+                xonxoff=False,
+            )
+        except Exception as exc:  # serial.SerialException and friends
+            raise TransportError(f"cannot open serial port {self.port!r}: {exc}") from exc
+        handle.dtr = self.config.assert_dtr
+        handle.rts = self.config.assert_rts
+        handle.reset_input_buffer()
+        handle.reset_output_buffer()
+        self._serial = handle
+
+    def close(self) -> None:
+        serial_handle, self._serial = self._serial, None
+        if serial_handle is not None:
+            try:
+                serial_handle.close()
+            except Exception as exc:  # pragma: no cover - close errors are not useful
+                raise TransportError(f"error closing serial port: {exc}") from exc
+
+    def write(self, data: bytes) -> None:
+        if not isinstance(data, bytes) or not data:
+            raise ValidationError("write data must be non-empty bytes")
+        serial_handle = self._require_handle()
+        try:
+            written = serial_handle.write(data)
+            serial_handle.flush()
+        except Exception as exc:
+            raise TransportError(f"serial write failed: {exc}") from exc
+        if written != len(data):
+            raise TransportError(f"short serial write: {written} of {len(data)} bytes")
+
+    def read(self, size: int) -> bytes:
+        if size <= 0:
+            raise ValidationError("read size must be positive")
+        serial_handle = self._require_handle()
+        try:
+            chunk = serial_handle.read(size)
+        except Exception as exc:
+            raise TransportError(f"serial read failed: {exc}") from exc
+        if not chunk:
+            raise TransportError(
+                f"serial read timed out after {self.config.read_timeout_seconds} s"
+            )
+        return bytes(chunk)
+
+    def _require_handle(self) -> object:
+        if not self.is_open:
+            raise TransportError("serial port is not open")
+        return self._serial
+
+    def __enter__(self) -> "SerialByteTransport":
         self.open()
         return self
 
