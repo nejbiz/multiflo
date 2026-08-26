@@ -31,6 +31,7 @@ from .models import (
     PeristalticPrime,
     PeristalticPurge,
     PlateType,
+    Protocol,
     Shake,
     Soak,
     validate_volume_for_cassette,
@@ -312,6 +313,44 @@ class MultiFloDriver:
                 raise ProtocolError("instrument cassette setting must be 1ul, 5ul, or 10ul")
         self._motion_preflight = info
         return info
+
+    def validate_protocol(self, protocol: Protocol) -> None:
+        """Validate every step against fresh device inventory before motion."""
+
+        info = self._require_motion_preflight()
+        installed = info.modules.primary_cassette
+        for index, step in enumerate(protocol.steps):
+            if not isinstance(
+                step,
+                (PeristalticDispense, PeristalticPrime, PeristalticPurge),
+            ):
+                continue
+            if not info.modules.primary_peristaltic:
+                raise ProtocolError(
+                    f"step {index} requires the primary peristaltic pump"
+                )
+            if installed is CassetteType.ANY:
+                raise ProtocolError(
+                    "instrument cassette setting must be 1ul, 5ul, or 10ul"
+                )
+            if (
+                step.cassette_type is not CassetteType.ANY
+                and step.cassette_type is not installed
+            ):
+                raise ProtocolError(
+                    f"step {index} requires {step.cassette_type.value}, but the "
+                    f"instrument setting is {installed.value}"
+                )
+            if isinstance(step, PeristalticDispense):
+                try:
+                    validate_volume_for_cassette(step.volume_ul, installed)
+                    if step.pre_dispense_volume_ul:
+                        validate_volume_for_cassette(
+                            step.pre_dispense_volume_ul,
+                            installed,
+                        )
+                except ValueError as error:
+                    raise ProtocolError(f"step {index}: {error}") from error
 
     def peristaltic_dispense(self, step: PeristalticDispense) -> ExchangeResult:
         installed = self._check_peristaltic_cassette(step.cassette_type)

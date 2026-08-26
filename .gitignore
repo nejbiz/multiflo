@@ -6,3 +6,5 @@ __pycache__/
 .coverage
 build/
 dist/
+.multiflo-active-run.json
+.multiflo-active-run.json.tmp

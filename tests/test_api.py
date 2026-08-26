@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import time
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from fastapi.testclient import TestClient
 
@@ -237,6 +239,39 @@ class ApiTests(unittest.TestCase):
         finally:
             runner.shutdown()
 
+    def test_retained_crash_marker_blocks_api_motion(self) -> None:
+        with TemporaryDirectory() as directory:
+            marker_path = Path(directory) / "active-run.json"
+            marker_path.write_text("{}\n", encoding="utf-8")
+            fake = ScriptedFakeTransport()
+            runner = ProtocolRunner(
+                MultiFloDriver(fake, expected_product_serial="14071419"),
+                crash_marker_path=marker_path,
+            )
+            try:
+                client = TestClient(create_app(runner))
+                result = client.post(
+                    "/v1/runs",
+                    json={
+                        "protocol": {
+                            "name": "blocked after restart",
+                            "steps": [
+                                {
+                                    "operation": "peristaltic_dispense",
+                                    "volume_ul": 100,
+                                }
+                            ],
+                        },
+                        "operator_confirmed_idle": True,
+                    },
+                )
+                self.assertEqual(result.status_code, 409)
+                self.assertIn("reconciliation", result.json()["detail"])
+                self.assertFalse(fake.is_open)
+                self.assertEqual(fake.writes, [])
+            finally:
+                runner.shutdown()
+
     def test_phase3_json_steps_run_through_fastapi(self) -> None:
         steps = [
             PeristalticPrime(volume_ul=3000),
@@ -324,6 +359,55 @@ class ApiTests(unittest.TestCase):
                     "soak",
                 ],
             )
+            fake.assert_script_consumed()
+        finally:
+            runner.shutdown()
+
+    def test_mixed_protocol_inventory_conflict_fails_before_first_motion(self) -> None:
+        fake = ScriptedFakeTransport(
+            self._inventory_reads(),
+            expected_writes=self._inventory_writes(),
+        )
+        runner = ProtocolRunner(
+            MultiFloDriver(
+                fake,
+                expected_product_serial="14071419",
+                completion_poll_interval_seconds=0,
+            )
+        )
+        try:
+            client = TestClient(create_app(runner))
+            started = client.post(
+                "/v1/runs",
+                json={
+                    "protocol": {
+                        "name": "incompatible mixed cassettes",
+                        "steps": [
+                            {
+                                "operation": "peristaltic_dispense",
+                                "volume_ul": 100,
+                                "cassette_type": "5ul",
+                            },
+                            {
+                                "operation": "peristaltic_prime",
+                                "volume_ul": 100,
+                                "cassette_type": "1ul",
+                            },
+                        ],
+                    },
+                    "operator_confirmed_idle": True,
+                },
+            )
+            self.assertEqual(started.status_code, 202)
+            run_id = started.json()["run_id"]
+            for _ in range(100):
+                result = client.get(f"/v1/runs/{run_id}").json()
+                if result["state"] == "failed":
+                    break
+                time.sleep(0.01)
+            self.assertEqual(result["state"], "failed")
+            self.assertIn("step 1 requires 1ul", result["error"])
+            self.assertEqual(result["completed_steps"], 0)
             fake.assert_script_consumed()
         finally:
             runner.shutdown()

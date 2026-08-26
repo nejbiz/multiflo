@@ -18,9 +18,10 @@ uv run python -m multiflo.tools.hardware_smoke --expected-serial 14071419
 uv run python -m multiflo.tools.hardware_inventory --expected-serial 14071419
 ```
 
-Read `phase_0.md`, `phase_1.md`, `phase_2.md`, and `phase_3.md` before hardware
-work. The Phase 0 and Phase 1 procedures do not authorize motion. The Phase 3
-guarded tool supports one explicitly authorized step at a time.
+Read `phase_0.md` through `phase_4.md` before hardware work. The Phase 0 and
+Phase 1 procedures do not authorize motion. The Phase 3 guarded tool supports
+one explicitly authorized step at a time, and Phase 4 defines restart
+reconciliation.
 
 The currently implemented operation models are primary peristaltic dispense,
 prime, purge, shake, and soak. Motion preflight requires the read-only device
@@ -46,7 +47,12 @@ type.
 - `POST /v1/runs/{run_id}/abort`
 
 Abort is cooperative between steps. There is no verified hardware cancellation
-command, so an in-flight dispense cannot be cancelled by the Phase 2 API.
+command, so an in-flight operation cannot be cancelled by the API.
+
+An active-run crash marker is written before motion and updated after each
+confirmed step. If it survives a process interruption, new runs are blocked
+until read-only Ready-state reconciliation or explicit physical operator
+reconciliation. See `phase_4.md` and `multiflo.tools.hardware_reconcile`.
 
 The one-shot motion tool is intentionally guarded and must only be run after its
 physical checklist and exact dispense settings have been confirmed:

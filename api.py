@@ -1,4 +1,4 @@
-"""Minimal FastAPI boundary for the Phase 2 dispense slice."""
+"""Minimal FastAPI boundary for validated sequential MultiFlo protocols."""
 
 from __future__ import annotations
 
@@ -63,4 +63,3 @@ def create_app(runner: ProtocolRunner) -> FastAPI:
         return run
 
     return app
-

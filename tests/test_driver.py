@@ -26,6 +26,7 @@ from multiflo.models import (
     PeristalticDispense,
     PeristalticPrime,
     PeristalticPurge,
+    Protocol,
     Shake,
 )
 from multiflo.transport import ScriptedFakeTransport
@@ -58,6 +59,33 @@ def program_status_response(
 
 
 class DriverTests(unittest.TestCase):
+    def test_whole_protocol_is_checked_against_inventory_before_motion(self) -> None:
+        driver = MultiFloDriver(ScriptedFakeTransport())
+        driver._motion_preflight = ReadOnlyDeviceInfo(
+            "14071419",
+            BasecodeVersionInfo("", "", "", "", "", "", "", b""),
+            InstalledModules(True, False, True, CassetteType.FIVE_UL),
+        )
+
+        with self.assertRaisesRegex(ProtocolError, "step 1 requires 1ul"):
+            driver.validate_protocol(
+                Protocol(
+                    name="cassette conflict",
+                    steps=[
+                        PeristalticDispense(volume_ul=100, cassette_type="5ul"),
+                        PeristalticPrime(volume_ul=100, cassette_type="1ul"),
+                    ],
+                )
+            )
+
+        with self.assertRaisesRegex(ProtocolError, "step 0.*between 5 and 2500"):
+            driver.validate_protocol(
+                Protocol(
+                    name="resolved any cassette",
+                    steps=[PeristalticDispense(volume_ul=3000)],
+                )
+            )
+
     def test_inventory_uses_peristaltic_only_machine_profile(self) -> None:
         version = b"7210200" + b"1.12    " + b"ABFB" + b"61FF" + b"103  " + b"002" + b"003"
         packets = [

@@ -1,4 +1,4 @@
-"""Typed Phase 2 models for the narrow peristaltic-dispense slice."""
+"""Strict typed models for supported base MultiFlo protocol steps."""
 
 from __future__ import annotations
 
