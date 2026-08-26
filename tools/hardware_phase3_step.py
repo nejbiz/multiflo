@@ -47,6 +47,7 @@ def _build_step(args: argparse.Namespace):
             pre_dispense_volume_ul=args.pre_dispense_volume_ul,
             pre_dispense_cycles=args.pre_dispense_cycles,
             columns=columns,
+            row_sections=args.row_sections,
         )
     if args.operation == "prime":
         return PeristalticPrime(
@@ -94,6 +95,7 @@ def main() -> int:
     parser.add_argument("--flow-rate", choices=("low", "medium", "high"), default="medium")
     parser.add_argument("--duration-seconds", type=int)
     parser.add_argument("--columns", default="all")
+    parser.add_argument("--row-sections", choices=("all", "odd"), default="all")
     parser.add_argument("--pre-dispense-volume-ul", type=int, default=10)
     parser.add_argument("--pre-dispense-cycles", type=int, default=2)
     parser.add_argument(
