@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -34,6 +35,7 @@ def main() -> int:
     parser.add_argument("--pre-dispense-volume-ul", type=int, default=10)
     parser.add_argument("--pre-dispense-cycles", type=int, default=2)
     parser.add_argument("--read-timeout-ms", type=int, default=120_000)
+    parser.add_argument("--request-id")
     parser.add_argument("--authorization", required=True)
     args = parser.parse_args()
 
@@ -65,6 +67,7 @@ def main() -> int:
         response = client.post(
             "/v1/runs",
             json={
+                "request_id": args.request_id or f"phase2-dispense-{uuid4().hex[:12]}",
                 "protocol": {
                     "name": "guarded Phase 2 hardware dispense",
                     "steps": [step.model_dump(mode="json")],

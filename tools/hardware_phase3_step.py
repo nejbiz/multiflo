@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -110,6 +111,7 @@ def main() -> int:
     parser.set_defaults(move_carrier_home=True)
     parser.add_argument("--read-timeout-ms", type=int, default=120_000)
     parser.add_argument("--completion-timeout-seconds", type=float, default=600.0)
+    parser.add_argument("--request-id")
     parser.add_argument("--authorization", required=True)
     args = parser.parse_args()
 
@@ -143,6 +145,7 @@ def main() -> int:
         response = client.post(
             "/v1/runs",
             json={
+                "request_id": args.request_id or f"phase3-{args.operation}-{uuid4().hex[:12]}",
                 "protocol": {
                     "name": f"guarded Phase 3 {args.operation}",
                     "steps": [step.model_dump(mode="json")],

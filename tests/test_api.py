@@ -43,6 +43,13 @@ def program_status_response(state: ProgramStepState) -> bytes:
 
 
 class ApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Every runner gets an isolated marker so tests never inherit or leave
+        # an active-run marker in the working directory.
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.marker_path = Path(directory.name) / "active-run.json"
+
     @staticmethod
     def _inventory_reads() -> list[bytes]:
         version = b"7210200" + b"1.12    " + b"ABFB" + b"61FF" + b"103  " + b"002" + b"003"
@@ -108,11 +115,13 @@ class ApiTests(unittest.TestCase):
                 fake,
                 expected_product_serial="14071419",
                 completion_poll_interval_seconds=0,
-            )
+            ),
+            crash_marker_path=self.marker_path,
         )
         try:
             client = TestClient(create_app(runner))
             payload = {
+                "request_id": "calib1-slice-1",
                 "protocol": {
                     "name": "calib1 vertical slice",
                     "steps": [step.model_dump(mode="json")],
@@ -152,7 +161,10 @@ class ApiTests(unittest.TestCase):
 
     def test_validation_rejects_unsafe_shape_without_opening_transport(self) -> None:
         fake = ScriptedFakeTransport()
-        runner = ProtocolRunner(MultiFloDriver(fake, expected_product_serial="14071419"))
+        runner = ProtocolRunner(
+            MultiFloDriver(fake, expected_product_serial="14071419"),
+            crash_marker_path=self.marker_path,
+        )
         try:
             client = TestClient(create_app(runner))
             result = client.post(
@@ -167,7 +179,10 @@ class ApiTests(unittest.TestCase):
 
     def test_calib25_384_odd_rows_validates_without_opening_transport(self) -> None:
         fake = ScriptedFakeTransport()
-        runner = ProtocolRunner(MultiFloDriver(fake, expected_product_serial="14071419"))
+        runner = ProtocolRunner(
+            MultiFloDriver(fake, expected_product_serial="14071419"),
+            crash_marker_path=self.marker_path,
+        )
         try:
             client = TestClient(create_app(runner))
             result = client.post(
@@ -198,7 +213,10 @@ class ApiTests(unittest.TestCase):
 
     def test_calib21_unsafe_volume_is_rejected_by_api(self) -> None:
         fake = ScriptedFakeTransport()
-        runner = ProtocolRunner(MultiFloDriver(fake, expected_product_serial="14071419"))
+        runner = ProtocolRunner(
+            MultiFloDriver(fake, expected_product_serial="14071419"),
+            crash_marker_path=self.marker_path,
+        )
         try:
             client = TestClient(create_app(runner))
             result = client.post(
@@ -224,13 +242,15 @@ class ApiTests(unittest.TestCase):
 
     def test_run_requires_literal_operator_confirmation(self) -> None:
         runner = ProtocolRunner(
-            MultiFloDriver(ScriptedFakeTransport(), expected_product_serial="14071419")
+            MultiFloDriver(ScriptedFakeTransport(), expected_product_serial="14071419"),
+            crash_marker_path=self.marker_path,
         )
         try:
             client = TestClient(create_app(runner))
             result = client.post(
                 "/v1/runs",
                 json={
+                    "request_id": "unconfirmed-1",
                     "protocol": {"name": "test", "steps": [{"volume_ul": 100}]},
                     "operator_confirmed_idle": False,
                 },
@@ -253,6 +273,7 @@ class ApiTests(unittest.TestCase):
                 result = client.post(
                     "/v1/runs",
                     json={
+                        "request_id": "blocked-after-restart",
                         "protocol": {
                             "name": "blocked after restart",
                             "steps": [
@@ -324,13 +345,15 @@ class ApiTests(unittest.TestCase):
                 fake,
                 expected_product_serial="14071419",
                 completion_poll_interval_seconds=0,
-            )
+            ),
+            crash_marker_path=self.marker_path,
         )
         try:
             client = TestClient(create_app(runner))
             started = client.post(
                 "/v1/runs",
                 json={
+                    "request_id": "phase3-mixed-1",
                     "protocol": {
                         "name": "phase 3 fake vertical slices",
                         "steps": [step.model_dump(mode="json") for step in steps],
@@ -373,13 +396,15 @@ class ApiTests(unittest.TestCase):
                 fake,
                 expected_product_serial="14071419",
                 completion_poll_interval_seconds=0,
-            )
+            ),
+            crash_marker_path=self.marker_path,
         )
         try:
             client = TestClient(create_app(runner))
             started = client.post(
                 "/v1/runs",
                 json={
+                    "request_id": "mixed-cassette-conflict",
                     "protocol": {
                         "name": "incompatible mixed cassettes",
                         "steps": [

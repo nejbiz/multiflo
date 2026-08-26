@@ -18,7 +18,7 @@ uv run python -m multiflo.tools.hardware_smoke --expected-serial 14071419
 uv run python -m multiflo.tools.hardware_inventory --expected-serial 14071419
 ```
 
-Read `phase_0.md` through `phase_4.md` before hardware work. The Phase 0 and
+Read `phase_0.md` through `phase_5.md` before hardware work. The Phase 0 and
 Phase 1 procedures do not authorize motion. The Phase 3 guarded tool supports
 one explicitly authorized step at a time, and Phase 4 defines restart
 reconciliation.
@@ -27,7 +27,7 @@ The currently implemented operation models are primary peristaltic dispense,
 prime, purge, shake, and soak. Motion preflight requires the read-only device
 program-step state to be `ready`. Each step uses the recovered Start Batch,
 status-polling, and End Batch lifecycle; an accepted command is not reported as
-complete until the device returns to `ready`. The API endpoints are:
+complete until the device returns to `ready`.
 
 Offline fixture coverage includes full-column-map 384-well primary peristaltic
 dispense and prime, plus the calib25 odd-row-section dispense. Partial 384-well
@@ -41,13 +41,38 @@ steps. `x_offset_steps` is limited to -60 (left) through 60 (right), and
 operator manual. Both default to centered (`0`) and are independent of cassette
 type.
 
+## API
+
+The documented endpoints are:
+
+- `GET /v1/health` - process health only; it never commands the instrument
+- `GET /v1/device` - verified identity, installed modules, connection, program-step state
 - `POST /v1/protocols/validate`
-- `POST /v1/runs`
+- `POST /v1/runs` - requires a client-supplied `request_id`
 - `GET /v1/runs/{run_id}`
 - `POST /v1/runs/{run_id}/abort`
 
+There is no raw command, packet, firmware, or maintenance endpoint, and no
+pause/resume endpoint, because no instrument-side pause command has been
+recovered and verified.
+
+Every `POST /v1/runs` needs a `request_id` of 1-64 characters matching
+`^[A-Za-z0-9][A-Za-z0-9._:-]*$`. Repeating a request ID with the same protocol
+returns the original run with `200` instead of starting duplicate motion.
+Reusing it with a different protocol, or starting while another run is active,
+returns `409`.
+
 Abort is cooperative between steps. There is no verified hardware cancellation
-command, so an in-flight operation cannot be cancelled by the API.
+command, so an in-flight operation cannot be cancelled by the API. An HTTP
+timeout or client disconnect never cancels, retries, or replays motion.
+
+Run the service on loopback with a single worker; several workers would compete
+for one USB handle:
+
+```powershell
+uv run python -m multiflo.service --expected-serial 14071419 --host 127.0.0.1 --port 8000
+uv run python -m multiflo.tools.export_openapi --output openapi.json
+```
 
 An active-run crash marker is written before motion and updated after each
 confirmed step. If it survives a process interruption, new runs are blocked
@@ -64,3 +89,12 @@ uv run python -m multiflo.tools.hardware_dispense --expected-serial 14071419 --c
 Phase 3 one-step hardware checks use `multiflo.tools.hardware_phase3_step` and
 an operation-specific authorization token. Never retry a run in
 `unknown_execution_state`; reconcile the instrument state first.
+
+The Phase 5 end-to-end check drives a real loopback Uvicorn server over HTTP. It
+is read-only by default; a motion step requires both `--motion` and the matching
+authorization token:
+
+```powershell
+uv run python -m multiflo.tools.hardware_phase5_e2e --expected-serial 14071419 --motion none
+uv run python -m multiflo.tools.hardware_phase5_e2e --expected-serial 14071419 --motion shake --duration-seconds 5 --authorization PHASE5_E2E_SETUP_CONFIRMED
+```

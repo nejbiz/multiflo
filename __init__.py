@@ -15,12 +15,24 @@ from .models import (
     Shake,
     Soak,
 )
-from .runner import ControllerState, ProtocolRunner, RunState, RunStatus
+from .runner import (
+    ControllerState,
+    DeviceIdentity,
+    DeviceModules,
+    DeviceStatus,
+    ProtocolRunner,
+    RunState,
+    RunStatus,
+    StartResult,
+)
 
 __all__ = [
     "Frame",
     "BatchRecoveryResult",
     "ControllerState",
+    "DeviceIdentity",
+    "DeviceModules",
+    "DeviceStatus",
     "MessageClass",
     "MultiFloDriver",
     "PeristalticDispense",
@@ -34,6 +46,7 @@ __all__ = [
     "RunStatus",
     "Shake",
     "Soak",
+    "StartResult",
     "decode_frame",
     "encode_request",
 ]

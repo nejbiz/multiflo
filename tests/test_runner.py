@@ -120,7 +120,11 @@ class RunnerTests(unittest.TestCase):
             ],
         )
         try:
-            started = runner.start(protocol, operator_confirmed_idle=True)
+            started = runner.start(
+                protocol,
+                operator_confirmed_idle=True,
+                request_id="req-1",
+            ).status
             self.assertTrue(driver.motion_started.wait(timeout=1))
             self.assertTrue(self.marker_path.exists())
             aborting = runner.abort(started.run_id)
@@ -151,7 +155,11 @@ class RunnerTests(unittest.TestCase):
             ],
         )
         try:
-            started = runner.start(protocol, operator_confirmed_idle=True)
+            started = runner.start(
+                protocol,
+                operator_confirmed_idle=True,
+                request_id="req-1",
+            ).status
             final = self.wait_for_terminal(runner, started.run_id)
             self.assertEqual(final.state, RunState.UNKNOWN_EXECUTION_STATE)
             self.assertEqual(final.completed_steps, 1)
@@ -175,7 +183,11 @@ class RunnerTests(unittest.TestCase):
                 ControllerState.RECONCILIATION_REQUIRED,
             )
             with self.assertRaisesRegex(BusyError, "reconciliation"):
-                restarted.start(protocol, operator_confirmed_idle=True)
+                restarted.start(
+                    protocol,
+                    operator_confirmed_idle=True,
+                    request_id="req-after-restart",
+                )
             self.assertEqual(
                 restarted.reconcile_startup(),
                 ControllerState.IDLE,
@@ -237,7 +249,8 @@ class RunnerTests(unittest.TestCase):
                     steps=[PeristalticDispense(volume_ul=100)],
                 ),
                 operator_confirmed_idle=True,
-            )
+                request_id="logged-1",
+            ).status
             final = self.wait_for_terminal(runner, started.run_id)
             self.assertEqual(final.state, RunState.COMPLETED)
         finally:
