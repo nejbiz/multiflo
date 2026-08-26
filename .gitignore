@@ -8,3 +8,6 @@ build/
 dist/
 .multiflo-active-run.json
 .multiflo-active-run.json.tmp
+
+# Local demo workspace (not tracked)
+implementation_demo/
