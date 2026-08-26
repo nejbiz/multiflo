@@ -16,10 +16,13 @@ command bodies; the project-owned runner composes those typed steps. The mixed
 prime, purge, shake, and soak path is verified end to end through FastAPI and a
 scripted transport.
 
-No hardware motion was performed in this phase. Phase 3 already established
-the individual command lifecycle on the connected instrument. A future guarded
-mixed hardware run may be useful as final integration evidence, but it is not
-needed to recover or implement multi-step orchestration.
+The MultiFlo was physically disconnected for the entire phase. No hardware
+connection, read-only query, or motion command was attempted. All Phase 4
+verification used models, unit tests, FastAPI tests, and scripted fake
+transports. Phase 3 already established the individual command lifecycle on the
+connected instrument. A future guarded mixed hardware run may be useful as
+final integration evidence, but it is not needed to recover or implement
+multi-step orchestration.
 
 ## Whole-protocol preflight
 
