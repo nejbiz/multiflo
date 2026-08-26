@@ -187,6 +187,36 @@ class DriverTests(unittest.TestCase):
             driver.shake(shake)
         fake.assert_script_consumed()
 
+    def test_calib23_384_dispense_uses_recovered_batch_and_body(self) -> None:
+        step = PeristalticDispense(
+            volume_ul=1,
+            plate_type="384_well",
+            flow_rate="low",
+            cassette_type="1ul",
+        )
+        fake = ScriptedFakeTransport(
+            [
+                response(0x008D),
+                response(0x008F),
+                program_status_response(ProgramStepState.READY),
+                response(0x008C),
+            ],
+            expected_writes=[
+                encode_request(0x008D, 0, b"\x01"),
+                encode_request(0x008F, 1, encode_peristaltic_dispense(step)),
+                encode_request(0x0092, 2),
+                encode_request(0x008C, 3),
+            ],
+        )
+        with MultiFloDriver(fake, completion_poll_interval_seconds=0) as driver:
+            driver._motion_preflight = ReadOnlyDeviceInfo(
+                "14071419",
+                BasecodeVersionInfo("", "", "", "", "", "", "", b""),
+                InstalledModules(True, False, True, CassetteType.ONE_UL),
+            )
+            driver.peristaltic_dispense(step)
+        fake.assert_script_consumed()
+
     def test_program_step_status_decoding_and_error_state(self) -> None:
         fake = ScriptedFakeTransport(
             [

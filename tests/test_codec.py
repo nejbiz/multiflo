@@ -36,6 +36,7 @@ DISPENSE_PACKET = bytes.fromhex(
 
 class CodecTests(unittest.TestCase):
     def test_start_batch_plate_selector(self) -> None:
+        self.assertEqual(encode_batch_start(PlateType.WELL_384), b"\x01")
         self.assertEqual(encode_batch_start(PlateType.WELL_96), b"\x04")
         self.assertEqual(encode_batch_start(PlateType.DEEP_WELL_96), b"\x05")
 
@@ -102,6 +103,63 @@ class CodecTests(unittest.TestCase):
         self.assertEqual(
             encode_soak(Soak(duration_seconds=30)),
             bytes.fromhex("04 01 00 00 03 00 1E 00 00 00 00 00"),
+        )
+
+    def test_calib20_required_5ul_cassette_golden_body(self) -> None:
+        step = PeristalticDispense(
+            volume_ul=750,
+            plate_type="96_well",
+            flow_rate="high",
+            cassette_type="5ul",
+        )
+        self.assertEqual(
+            encode_peristaltic_dispense(step),
+            bytes.fromhex(
+                "04 EE 02 02 02 00 00 50 01 0A 00 02 "
+                "FF FF FF FF FF FF 00 01 00 00 00 00"
+            ),
+        )
+
+    def test_calib22_required_10ul_cassette_golden_body(self) -> None:
+        step = PeristalticDispense(
+            volume_ul=750,
+            plate_type="96_well",
+            flow_rate="high",
+            cassette_type="10ul",
+        )
+        self.assertEqual(
+            encode_peristaltic_dispense(step),
+            bytes.fromhex(
+                "04 EE 02 02 03 00 00 50 01 0A 00 02 "
+                "FF FF FF FF FF FF 00 01 00 00 00 00"
+            ),
+        )
+
+    def test_calib23_384_well_dispense_golden_body(self) -> None:
+        step = PeristalticDispense(
+            volume_ul=1,
+            plate_type="384_well",
+            flow_rate="low",
+            cassette_type="1ul",
+        )
+        self.assertEqual(
+            encode_peristaltic_dispense(step),
+            bytes.fromhex(
+                "01 01 00 00 01 00 00 4D 01 0A 00 02 "
+                "FF FF FF FF FF FF 00 01 00 00 00 00"
+            ),
+        )
+
+    def test_calib24_384_well_prime_golden_body(self) -> None:
+        step = PeristalticPrime(
+            volume_ul=3000,
+            plate_type="384_well",
+            flow_rate="high",
+            cassette_type="1ul",
+        )
+        self.assertEqual(
+            encode_peristaltic_prime(step),
+            bytes.fromhex("01 B8 0B 00 00 02 01 01 01 00 00"),
         )
 
     def test_communication_test_golden_packet(self) -> None:

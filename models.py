@@ -22,6 +22,7 @@ class CassetteType(str, Enum):
 
 
 class PlateType(str, Enum):
+    WELL_384 = "384_well"
     WELL_96 = "96_well"
     DEEP_WELL_96 = "96_deep_well"
 
@@ -60,7 +61,7 @@ def validate_volume_for_cassette(volume_ul: int, cassette_type: CassetteType) ->
 
 
 class PeristalticDispense(BaseModel):
-    """One primary peristaltic dispense to a supported 96-well geometry."""
+    """One primary peristaltic dispense to a supported plate geometry."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -87,6 +88,10 @@ class PeristalticDispense(BaseModel):
                 self.cassette_type,
             )
         if self.columns != "all":
+            if self.plate_type is PlateType.WELL_384:
+                raise ValueError(
+                    "partial 384-well column maps are not supported without a fixture"
+                )
             if not self.columns:
                 raise ValueError("at least one dispense column is required")
             if any(column < 1 or column > 12 for column in self.columns):

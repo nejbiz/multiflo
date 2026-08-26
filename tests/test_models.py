@@ -39,6 +39,24 @@ class ModelTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "between 1 and 12"):
             PeristalticDispense(volume_ul=100, columns=(13,))
 
+    def test_calib21_unsafe_1ul_cassette_volume_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "between 1 and 50"):
+            PeristalticDispense(
+                volume_ul=750,
+                plate_type="96_well",
+                flow_rate="high",
+                cassette_type="1ul",
+            )
+
+    def test_partial_384_well_map_waits_for_a_fixture(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "partial 384-well"):
+            PeristalticDispense(
+                volume_ul=1,
+                plate_type="384_well",
+                cassette_type="1ul",
+                columns=(1,),
+            )
+
     def test_protocol_discriminates_phase3_steps(self) -> None:
         protocol = Protocol.model_validate(
             {

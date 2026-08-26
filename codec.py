@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import IntEnum
 import struct
+from typing import Literal
 
 from .errors import ProtocolError, ValidationError
 from .models import (
@@ -27,8 +28,16 @@ _PERISTALTIC_DISPENSE = struct.Struct("<BHBBbbHHB6sBB4s")
 _PERISTALTIC_PRIME_PURGE = struct.Struct("<BHHBBBB2s")
 _SHAKE_SOAK = struct.Struct("<BBHBBH4s")
 
-_PLATE_CODES = {PlateType.WELL_96: 4, PlateType.DEEP_WELL_96: 5}
-_DISPENSE_HEIGHTS = {PlateType.WELL_96: 336, PlateType.DEEP_WELL_96: 929}
+_PLATE_CODES = {
+    PlateType.WELL_384: 1,
+    PlateType.WELL_96: 4,
+    PlateType.DEEP_WELL_96: 5,
+}
+_DISPENSE_HEIGHTS = {
+    PlateType.WELL_384: 333,
+    PlateType.WELL_96: 336,
+    PlateType.DEEP_WELL_96: 929,
+}
 _FLOW_CODES = {FlowRate.LOW: 0, FlowRate.MEDIUM: 1, FlowRate.HIGH: 2}
 
 
@@ -97,9 +106,9 @@ def encode_request(command_id: int, message_id: int = 0, body: bytes = b"") -> b
 
 
 def encode_peristaltic_dispense(step: PeristalticDispense) -> bytes:
-    """Encode the proven full-plate 96-deep-well peristaltic body."""
+    """Encode a fixture-proven primary peristaltic dispense body."""
 
-    position_map = _encode_96_column_map(step.plate_type, step.columns)
+    position_map = _encode_column_map(step.plate_type, step.columns)
     return _PERISTALTIC_DISPENSE.pack(
         _PLATE_CODES[step.plate_type],
         step.volume_ul,
@@ -117,12 +126,14 @@ def encode_peristaltic_dispense(step: PeristalticDispense) -> bytes:
     )
 
 
-def _encode_96_column_map(
+def _encode_column_map(
     plate_type: PlateType,
     columns: Literal["all"] | tuple[int, ...],
 ) -> bytes:
     if columns == "all":
         return b"\xff" * 6
+    if plate_type is PlateType.WELL_384:
+        raise ValueError("partial 384-well column maps are not supported")
     bits = [0] * 48
     for column in columns:
         bits[column - 1] = 1

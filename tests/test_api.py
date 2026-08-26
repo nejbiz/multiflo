@@ -163,6 +163,62 @@ class ApiTests(unittest.TestCase):
         finally:
             runner.shutdown()
 
+    def test_calib23_384_step_validates_without_opening_transport(self) -> None:
+        fake = ScriptedFakeTransport()
+        runner = ProtocolRunner(MultiFloDriver(fake, expected_product_serial="14071419"))
+        try:
+            client = TestClient(create_app(runner))
+            result = client.post(
+                "/v1/protocols/validate",
+                json={
+                    "name": "calib23",
+                    "steps": [
+                        {
+                            "operation": "peristaltic_dispense",
+                            "plate_type": "384_well",
+                            "volume_ul": 1,
+                            "flow_rate": "low",
+                            "cassette_type": "1ul",
+                        }
+                    ],
+                },
+            )
+            self.assertEqual(result.status_code, 200)
+            self.assertEqual(
+                result.json()["protocol"]["steps"][0]["plate_type"],
+                "384_well",
+            )
+            self.assertFalse(fake.is_open)
+            self.assertEqual(fake.writes, [])
+        finally:
+            runner.shutdown()
+
+    def test_calib21_unsafe_volume_is_rejected_by_api(self) -> None:
+        fake = ScriptedFakeTransport()
+        runner = ProtocolRunner(MultiFloDriver(fake, expected_product_serial="14071419"))
+        try:
+            client = TestClient(create_app(runner))
+            result = client.post(
+                "/v1/protocols/validate",
+                json={
+                    "name": "calib21",
+                    "steps": [
+                        {
+                            "operation": "peristaltic_dispense",
+                            "plate_type": "96_well",
+                            "volume_ul": 750,
+                            "flow_rate": "high",
+                            "cassette_type": "1ul",
+                        }
+                    ],
+                },
+            )
+            self.assertEqual(result.status_code, 422)
+            self.assertFalse(fake.is_open)
+            self.assertEqual(fake.writes, [])
+        finally:
+            runner.shutdown()
+
     def test_run_requires_literal_operator_confirmation(self) -> None:
         runner = ProtocolRunner(
             MultiFloDriver(ScriptedFakeTransport(), expected_product_serial="14071419")

@@ -84,7 +84,11 @@ def main() -> int:
         required=True,
         choices=("dispense", "prime", "purge", "shake", "soak"),
     )
-    parser.add_argument("--plate-type", choices=("96_well", "96_deep_well"), default="96_well")
+    parser.add_argument(
+        "--plate-type",
+        choices=("96_well", "96_deep_well", "384_well"),
+        default="96_well",
+    )
     parser.add_argument("--cassette", choices=("1ul", "5ul", "10ul"), default="5ul")
     parser.add_argument("--volume-ul", type=int)
     parser.add_argument("--flow-rate", choices=("low", "medium", "high"), default="medium")
