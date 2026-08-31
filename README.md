@@ -13,8 +13,7 @@ protocols/          controlled .LHC fixtures and their change log
 ```
 
 Import paths are unchanged by the src layout: the package is still `multiflo`
-and the tools are still `python -m multiflo.tools.<name>`. The `phase_*.md`
-reports predate the move and refer to the old top-level `tools/` path.
+and the tools are still `python -m multiflo.tools.<name>`.
 
 ## Development
 
@@ -56,6 +55,17 @@ steps. `x_offset_steps` is limited to -60 (left) through 60 (right), and
 operator manual. Both default to centered (`0`) and are independent of cassette
 type.
 
+Every step in one protocol must use the same `plate_type`. The step defaults
+differ (dispense is `96_deep_well`, the rest are `96_well`) and each step sends
+its own plate selector, so a mixed protocol would silently run two geometries
+against one plate. Mixing them is rejected at validation.
+
+Dispense height above the carrier is selected by plate type: 333 steps for
+384-well, 336 for 96-well, and 1020 for 96-deep-well. That deep-well value is
+deliberately 91 steps (about 4 mm) above LHC's stock 929, for the deep-well
+plates in use here. `dispense_height_steps` overrides it per step for a plate of
+non-standard depth; a lower number is closer to the carrier.
+
 ## API
 
 The documented endpoints are:
@@ -95,15 +105,27 @@ until read-only Ready-state reconciliation or explicit physical operator
 reconciliation. See `phase_4.md` and `multiflo.tools.hardware_reconcile`.
 
 The one-shot motion tool is intentionally guarded and must only be run after its
-physical checklist and exact dispense settings have been confirmed:
+physical checklist and exact settings have been confirmed. It takes an
+operation-specific authorization token (`PHASE3_<OPERATION>_SETUP_CONFIRMED`):
 
 ```powershell
-uv run python -m multiflo.tools.hardware_dispense --expected-serial 14071419 --cassette 5ul --volume-ul 100 --flow-rate medium --pre-dispense-volume-ul 10 --pre-dispense-cycles 2 --authorization CASSETTE_PLATE_TUBING_IDLE_CONFIRMED
+uv run python -m multiflo.tools.hardware_phase3_step --expected-serial 14071419 --operation dispense --plate-type 96_deep_well --cassette 5ul --volume-ul 100 --flow-rate medium --authorization PHASE3_DISPENSE_SETUP_CONFIRMED
 ```
 
-Phase 3 one-step hardware checks use `multiflo.tools.hardware_phase3_step` and
-an operation-specific authorization token. Never retry a run in
-`unknown_execution_state`; reconcile the instrument state first.
+`--dry-run` encodes the step and prints the exact bytes without opening the
+instrument, so an invocation can be checked before anything moves:
+
+```powershell
+uv run python -m multiflo.tools.hardware_phase3_step --expected-serial 14071419 --operation dispense --volume-ul 100 --cassette 5ul --authorization unused --dry-run
+```
+
+Never retry a run in `unknown_execution_state`; reconcile the instrument state
+first.
+
+Every tool writes JSON-line events for the whole run - each command exchange,
+step start and completion, and the terminal state. `--log-level DEBUG` includes
+the bytes and timing of each exchange, and `--log-file` appends the same events
+to a file for an auditable record.
 
 The Phase 5 end-to-end check drives a real loopback Uvicorn server over HTTP. It
 is read-only by default; a motion step requires both `--motion` and the matching

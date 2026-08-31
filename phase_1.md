@@ -14,9 +14,9 @@ No motion or hardware-changing command was sent.
 - `transport.py`: exact D2XX enumeration/selection, open/configure/purge/read/write/close, plus `ScriptedFakeTransport`.
 - `driver.py`: one in-flight exchange, ACK/NAK handling, response matching, device-status decoding, and typed read-only inventory.
 - `errors.py`: stable validation, transport, protocol, device, busy, and ambiguous-execution errors.
-- `tools/hardware_smoke.py`: serial-guarded script that can send only `0x0073`.
-- `tools/hardware_inventory.py`: serial-guarded identity, firmware, and installed-module inventory.
-- `tools/dump_managed_il.ps1`: offline evidence helper; vendor code is never a runtime dependency.
+- `src/multiflo/tools/hardware_smoke.py`: serial-guarded script that can send only `0x0073`.
+- `src/multiflo/tools/hardware_inventory.py`: serial-guarded identity, firmware, and installed-module inventory.
+- `src/multiflo/tools/dump_managed_il.ps1`: offline evidence helper; vendor code is never a runtime dependency.
 
 ## Important hardware correction to the original plan
 

@@ -83,7 +83,7 @@ selection by descriptor serial and description; on this Pi there is exactly one
 FT232 and one `/dev/ttyUSB0`, and the stronger protocol-level serial check
 remains.
 
-### `tools/revpi_run.py`
+### `src/multiflo/tools/revpi_run.py`
 
 A prototyping entry point that builds a `MultiFloDriver` over
 `SerialByteTransport` and drives the `ProtocolRunner` directly, bypassing the
@@ -110,7 +110,8 @@ already present system-wide.
    `annotated-types`, `typing-extensions`, and `typing-inspection`.
 2. The `multiflo` package modules (`__init__`, `errors`, `models`, `codec`,
    `transport`, `driver`, `runner`), an empty `multiflo/tools/__init__.py`,
-   `tools/revpi_run.py`, and the wheels were copied to `/home/pi/mf` over SFTP.
+   `tools/revpi_run.py` (now `src/multiflo/tools/revpi_run.py`), and the
+   wheels were copied to `/home/pi/mf` over SFTP.
    The FastAPI-only modules (`api.py`, `service.py`, the D2XX/FastAPI hardware
    tools) were intentionally not shipped.
 3. On the Pi: `uv venv --system-site-packages --python 3.11 .venv` (so the

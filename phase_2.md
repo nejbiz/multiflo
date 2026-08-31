@@ -39,7 +39,9 @@ This phase does not implement any Phase 3 operations.
 - `runner.py`: one active protocol, one worker thread, ordered steps, pollable
   progress/results, and cooperative abort requests.
 - `api.py`: validation, start, poll, and abort endpoints.
-- `tools/hardware_dispense.py`: guarded one-shot motion test through FastAPI.
+- `tools/hardware_dispense.py`: guarded one-shot motion test through
+  FastAPI. Later removed as a strict subset of
+  `src/multiflo/tools/hardware_phase3_step.py --operation dispense`.
 
 Supported request surface:
 
