@@ -4,23 +4,19 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
-import json
 
 from multiflo.driver import MultiFloDriver
-from multiflo.transport import D2xxConfig, D2xxTransport
+
+from ._harness import add_device_args, build_transport, emit, start_logging
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--expected-serial", required=True)
-    parser.add_argument("--expected-description", default="MultiFlo")
+    add_device_args(parser)
     args = parser.parse_args()
 
-    transport = D2xxTransport(
-        expected_serial=args.expected_serial,
-        expected_description=args.expected_description,
-        config=D2xxConfig(read_timeout_ms=2_000),
-    )
+    start_logging(args)
+    transport = build_transport(args)
     exit_code = 0
     with MultiFloDriver(transport) as driver:
         driver.communication_test()
@@ -47,7 +43,7 @@ def main() -> int:
             "latency_timer_ms": transport.latency_timer_ms,
         }
         inventory["program_step_status"] = program_status
-    print(json.dumps(inventory, indent=2))
+    emit(inventory)
     return exit_code
 
 

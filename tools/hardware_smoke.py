@@ -3,25 +3,22 @@
 from __future__ import annotations
 
 import argparse
-import json
 
 from multiflo.driver import MultiFloDriver
-from multiflo.transport import D2xxTransport
+
+from ._harness import add_device_args, build_transport, emit, start_logging
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--expected-serial", required=True)
-    parser.add_argument("--expected-description", default="MultiFlo")
+    add_device_args(parser)
     parser.add_argument("--repetitions", type=int, default=10)
     args = parser.parse_args()
     if not 1 <= args.repetitions <= 100:
         parser.error("--repetitions must be between 1 and 100")
 
-    transport = D2xxTransport(
-        expected_serial=args.expected_serial,
-        expected_description=args.expected_description,
-    )
+    start_logging(args)
+    transport = build_transport(args)
     with MultiFloDriver(transport) as driver:
         results = []
         for index in range(args.repetitions):
@@ -45,7 +42,7 @@ def main() -> int:
             "command": "0x0073",
             "results": results,
         }
-    print(json.dumps(output, indent=2))
+    emit(output)
     return 0
 
 

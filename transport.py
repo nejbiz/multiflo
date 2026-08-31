@@ -1,16 +1,24 @@
-"""Narrow FTDI D2XX byte transport and a scripted test transport."""
+"""Narrow FTDI D2XX and serial byte transports.
+
+These move bytes and know nothing about MultiFlo commands. Test doubles live
+in tests/fakes.py, not here.
+"""
 
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass
 import ctypes
+import logging
 import os
 import sys
 from pathlib import Path
-from typing import Deque, Iterable, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from .errors import TransportError, ValidationError
+from .logs import log_event
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 FT_OK = 0
@@ -73,6 +81,8 @@ class ByteTransport(Protocol):
     def close(self) -> None: ...
     def read(self, size: int) -> bytes: ...
     def write(self, data: bytes) -> None: ...
+    def purge(self) -> None:
+        """Discard buffered bytes so a partial frame cannot shift the next read."""
 
 
 def _default_d2xx_library_name() -> str:
@@ -283,6 +293,18 @@ class D2xxTransport:
                 self.close()
             finally:
                 raise
+        log_event(
+            _LOGGER,
+            "d2xx_opened",
+            serial=selected.serial_number,
+            description=selected.description,
+            vendor_id=f"0x{selected.vendor_id:04x}",
+            product_id=f"0x{selected.product_id:04x}",
+            latency_timer_ms=self.latency_timer_ms,
+            read_timeout_ms=self.config.read_timeout_ms,
+            write_timeout_ms=self.config.write_timeout_ms,
+            baud_rate=self.config.baud_rate,
+        )
 
     def _configure(self) -> None:
         handle = self._require_handle()
@@ -334,6 +356,13 @@ class D2xxTransport:
             "write",
         )
         if written.value != len(data):
+            log_event(
+                _LOGGER,
+                "d2xx_short_write",
+                level=logging.WARNING,
+                requested=len(data),
+                written=written.value,
+            )
             raise TransportError(f"short D2XX write: {written.value} of {len(data)} bytes")
 
     def read(self, size: int) -> bytes:
@@ -347,6 +376,13 @@ class D2xxTransport:
             "read",
         )
         if read_count.value == 0:
+            log_event(
+                _LOGGER,
+                "d2xx_read_timeout",
+                level=logging.WARNING,
+                requested=size,
+                timeout_ms=self.config.read_timeout_ms,
+            )
             raise TransportError(
                 f"D2XX read timed out after {self.config.read_timeout_ms} ms"
             )
@@ -368,6 +404,32 @@ class D2xxTransport:
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         self.close()
+
+
+class NullTransport:
+    """A transport with no instrument behind it.
+
+    Lets the driver and API be constructed offline - OpenAPI export and
+    dry-run encoding checks - while guaranteeing that nothing can reach a
+    machine. Every I/O call fails loudly rather than silently succeeding.
+    """
+
+    is_open = False
+
+    def open(self) -> None:
+        raise TransportError("no instrument is configured for this transport")
+
+    def close(self) -> None:
+        pass
+
+    def purge(self) -> None:
+        pass
+
+    def read(self, size: int) -> bytes:
+        raise TransportError("no instrument is configured for this transport")
+
+    def write(self, data: bytes) -> None:
+        raise TransportError("no instrument is configured for this transport")
 
 
 @dataclass(frozen=True, slots=True)
@@ -476,6 +538,11 @@ class SerialByteTransport:
             )
         return bytes(chunk)
 
+    def purge(self) -> None:
+        serial_handle = self._require_handle()
+        serial_handle.reset_input_buffer()
+        serial_handle.reset_output_buffer()
+
     def _require_handle(self) -> object:
         if not self.is_open:
             raise TransportError("serial port is not open")
@@ -487,58 +554,3 @@ class SerialByteTransport:
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         self.close()
-
-
-class ScriptedFakeTransport:
-    """Return scripted fragments or failures; intentionally not a simulator."""
-
-    def __init__(
-        self,
-        reads: Iterable[bytes | Exception] = (),
-        *,
-        expected_writes: Iterable[bytes] | None = None,
-    ) -> None:
-        self._reads: Deque[bytes | Exception] = deque(reads)
-        self._current = b""
-        self._expected_writes = deque(expected_writes or ())
-        self.writes: list[bytes] = []
-        self.is_open = False
-
-    def open(self) -> None:
-        self.is_open = True
-
-    def close(self) -> None:
-        self.is_open = False
-
-    def write(self, data: bytes) -> None:
-        if not self.is_open:
-            raise TransportError("fake transport is not open")
-        if self._expected_writes:
-            expected = self._expected_writes.popleft()
-            if data != expected:
-                raise TransportError(
-                    f"unexpected write {data.hex(' ')}, expected {expected.hex(' ')}"
-                )
-        self.writes.append(data)
-
-    def read(self, size: int) -> bytes:
-        if not self.is_open:
-            raise TransportError("fake transport is not open")
-        if not self._current:
-            if not self._reads:
-                raise TransportError("scripted read timed out")
-            item = self._reads.popleft()
-            if isinstance(item, Exception):
-                raise item
-            self._current = item
-        result, self._current = self._current[:size], self._current[size:]
-        if not result:
-            raise TransportError("scripted transport disconnected")
-        return result
-
-    def assert_script_consumed(self) -> None:
-        if self._expected_writes:
-            raise AssertionError(f"{len(self._expected_writes)} expected writes remain")
-        if self._reads or self._current:
-            raise AssertionError("scripted reads remain")
-

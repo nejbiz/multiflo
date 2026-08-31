@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
-import json
 
 from multiflo.driver import MultiFloDriver
-from multiflo.transport import D2xxConfig, D2xxTransport
+
+from ._harness import add_device_args, build_transport, emit, start_logging
 
 
 AUTHORIZATION = "STATIONARY_AREA_CLEAR_LHC_CLOSED_END_BATCH_CONFIRMED"
@@ -15,18 +15,14 @@ AUTHORIZATION = "STATIONARY_AREA_CLEAR_LHC_CLOSED_END_BATCH_CONFIRMED"
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--expected-serial", required=True)
-    parser.add_argument("--expected-description", default="MultiFlo")
+    add_device_args(parser)
     parser.add_argument("--authorization", required=True)
     args = parser.parse_args()
     if args.authorization != AUTHORIZATION:
         parser.error(f"--authorization must be {AUTHORIZATION}")
 
-    transport = D2xxTransport(
-        expected_serial=args.expected_serial,
-        expected_description=args.expected_description,
-        config=D2xxConfig(read_timeout_ms=65_000),
-    )
+    start_logging(args)
+    transport = build_transport(args)
     with MultiFloDriver(transport) as driver:
         result = driver.recover_end_batch(operator_confirmed_stationary=True)
     output = {
@@ -39,7 +35,7 @@ def main() -> int:
     }
     output["before"]["state"] = result.before.state.name.lower()
     output["after"]["state"] = result.after.state.name.lower()
-    print(json.dumps(output, indent=2))
+    emit(output)
     return 0
 
 

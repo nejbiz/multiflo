@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import FastAPI, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict
 
-from .errors import BusyError
+from .errors import BusyError, PreconditionError
 from .models import Protocol
 from .runner import DeviceStatus, ProtocolRunner, RequestId, RunStatus
 
@@ -35,6 +35,11 @@ class HealthStatus(BaseModel):
     controller_state: str
     reconciliation_required: bool
     active_run_id: UUID | None = None
+    # Present when a previous run was interrupted, so an operator can see what
+    # is blocking new work without reading the marker file.
+    retained_run_id: UUID | None = None
+    retained_last_confirmed_step: int | None = None
+    marker_unreadable: bool = False
 
 
 class ValidationResult(BaseModel):
@@ -61,10 +66,16 @@ def create_app(runner: ProtocolRunner) -> FastAPI:
 
     @app.get("/v1/health", response_model=HealthStatus, operation_id="get_health")
     def get_health() -> HealthStatus:
+        retained = runner.retained_marker
         return HealthStatus(
             controller_state=runner.state.value,
             reconciliation_required=runner.reconciliation_required,
             active_run_id=runner.active_run_id,
+            retained_run_id=None if retained is None else retained.run_id,
+            retained_last_confirmed_step=(
+                None if retained is None else retained.last_confirmed_step
+            ),
+            marker_unreadable=runner.marker_unreadable,
         )
 
     @app.get("/v1/device", response_model=DeviceStatus, operation_id="get_device")
@@ -97,6 +108,8 @@ def create_app(runner: ProtocolRunner) -> FastAPI:
             )
         except BusyError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except PreconditionError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         if result.duplicate:
             # A repeated request ID returns the original run instead of
             # starting duplicate physical work.

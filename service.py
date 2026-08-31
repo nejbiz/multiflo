@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
-import logging
 from pathlib import Path
 
 from fastapi import FastAPI
 
 from .api import create_app
 from .driver import MultiFloDriver
+from .logs import configure_logging
 from .runner import DEFAULT_CRASH_MARKER_PATH, ProtocolRunner
 from .transport import D2xxConfig, D2xxTransport
 
@@ -31,7 +31,7 @@ def build_service(
     expected_serial: str,
     expected_description: str = "MultiFlo",
     crash_marker_path: str | Path = DEFAULT_CRASH_MARKER_PATH,
-    read_timeout_ms: int = 120_000,
+    read_timeout_ms: int = 5_000,
     completion_timeout_seconds: float = 600.0,
 ) -> tuple[FastAPI, ProtocolRunner]:
     """Build one runner that owns one instrument, plus its API application."""
@@ -59,7 +59,18 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--marker-path", type=Path, default=DEFAULT_CRASH_MARKER_PATH)
-    parser.add_argument("--read-timeout-ms", type=int, default=120_000)
+    parser.add_argument("--read-timeout-ms", type=int, default=5_000)
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+        help="DEBUG logs every command exchange with its bytes and timing",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=Path,
+        help="also append JSON-line events here, for an auditable run record",
+    )
     parser.add_argument("--completion-timeout-seconds", type=float, default=600.0)
     parser.add_argument(
         "--allow-non-loopback",
@@ -74,7 +85,7 @@ def main() -> int:
             "127.0.0.1 unless --allow-non-loopback is given"
         )
 
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    configure_logging(level=args.log_level, log_file=args.log_file)
     app, runner = build_service(
         expected_serial=args.expected_serial,
         expected_description=args.expected_description,

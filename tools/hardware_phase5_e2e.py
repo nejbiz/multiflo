@@ -9,6 +9,7 @@ with the matching authorization token.
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import json
 import socket
 import threading
@@ -20,6 +21,7 @@ import httpx
 import uvicorn
 
 from multiflo.models import PlateType, Shake, Soak
+from multiflo.logs import configure_logging
 from multiflo.service import build_service
 
 
@@ -170,6 +172,12 @@ def _checks(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-serial", required=True)
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+    )
+    parser.add_argument("--log-file", type=Path)
     parser.add_argument("--expected-description", default="MultiFlo")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
@@ -188,6 +196,8 @@ def main() -> int:
     parser.add_argument("--completion-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--authorization")
     args = parser.parse_args()
+    configure_logging(level=getattr(args, 'log_level', 'INFO'),
+                      log_file=getattr(args, 'log_file', None))
 
     if args.motion != "none" and args.authorization != AUTHORIZATION:
         parser.error(

@@ -167,3 +167,23 @@ class Protocol(BaseModel):
 
     name: str = Field(min_length=1, max_length=64)
     steps: list[ProtocolStep] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_single_plate_geometry(self) -> "Protocol":
+        """Reject a protocol that mixes plate types.
+
+        Each step sends its own plate selector in Start Batch, and plate type
+        selects the dispense height. The step defaults differ (dispense is
+        96-deep-well, everything else is 96-well), so a protocol that leaves
+        plate_type unset on some steps would silently run two geometries
+        against one physical plate.
+        """
+
+        plate_types = {step.plate_type for step in self.steps}
+        if len(plate_types) > 1:
+            named = ", ".join(sorted(plate.value for plate in plate_types))
+            raise ValueError(
+                f"every step must use the same plate type; got {named}. Set "
+                "plate_type explicitly on each step."
+            )
+        return self

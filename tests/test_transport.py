@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from multiflo.errors import TransportError
-from multiflo.transport import ScriptedFakeTransport
+from multiflo.tests.fakes import ScriptedFakeTransport
 
 
 class ScriptedFakeTransportTests(unittest.TestCase):

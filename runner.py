@@ -11,13 +11,15 @@ import logging
 import os
 from pathlib import Path
 from threading import Lock
-from typing import Annotated, Literal
+import time
+from typing import Annotated, Callable, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .driver import ExchangeResult, MultiFloDriver, ProgramStepState
 from .errors import BusyError, UnknownExecutionState
+from .logs import log_event
 from .models import (
     CassetteType,
     PeristalticDispense,
@@ -79,6 +81,11 @@ class RunStatus(BaseModel):
     current_step: int | None = Field(default=None, ge=0)
     error: str | None = None
     abort_is_cooperative: bool = True
+    # Last state the instrument reported. Polling a run is the only way to see
+    # the machine while it owns the transport, so it is carried here.
+    device_state: str | None = None
+    device_error_code: int | None = Field(default=None, ge=0)
+    device_state_age_seconds: float | None = Field(default=None, ge=0)
     results: list["StepResult"] = Field(default_factory=list)
 
 
@@ -89,6 +96,12 @@ class StepResult(BaseModel):
     operation: str
     device_status: int = Field(ge=0, le=0xFFFF)
     indication_count: int = Field(ge=0)
+
+
+StepCompletedCallback = Callable[
+    [UUID, int, ProtocolStep, StepResult, CassetteType],
+    None,
+]
 
 
 class DeviceIdentity(BaseModel):
@@ -130,6 +143,10 @@ class DeviceStatus(BaseModel):
     modules: DeviceModules | None = None
     program_step_state: Literal["ready", "busy", "paused", "error", "stopped"] | None = None
     program_step_error_code: int | None = Field(default=None, ge=0)
+    retained_run_id: UUID | None = None
+    retained_last_confirmed_step: int | None = Field(default=None, ge=0)
+    retained_interrupted_at: datetime | None = None
+    marker_unreadable: bool = False
     error: str | None = None
 
 
@@ -188,6 +205,7 @@ class ProtocolRunner:
         crash_marker_path: str | Path = DEFAULT_CRASH_MARKER_PATH,
         logger: logging.Logger | None = None,
         device_query_timeout_seconds: float = DEFAULT_DEVICE_QUERY_TIMEOUT_SECONDS,
+        on_step_completed: StepCompletedCallback | None = None,
     ) -> None:
         self.driver = driver
         self.crash_marker_path = Path(crash_marker_path)
@@ -197,16 +215,30 @@ class ProtocolRunner:
         if device_query_timeout_seconds <= 0:
             raise ValueError("device query timeout must be positive")
         self.device_query_timeout_seconds = device_query_timeout_seconds
+        self._on_step_completed = on_step_completed
         self._runs: dict[UUID, _RunRecord] = {}
         self._requests: dict[str, UUID] = {}
         self._active_run_id: UUID | None = None
         self._closed = False
-        self._reconciliation_required = self.crash_marker_path.exists()
+        self._retained_marker: _CrashMarker | None = None
+        self._marker_unreadable = False
+        self._reconciliation_required = self._load_crash_marker()
         self._controller_state = (
             ControllerState.RECONCILIATION_REQUIRED
             if self._reconciliation_required
             else ControllerState.DISCONNECTED
         )
+        if self._reconciliation_required:
+            self._log_event(
+                "startup_marker_retained",
+                run_id=None if self._retained_marker is None else str(self._retained_marker.run_id),
+                protocol_name=None if self._retained_marker is None else self._retained_marker.protocol_name,
+                current_step=None if self._retained_marker is None else self._retained_marker.current_step,
+                last_confirmed_step=(
+                    None if self._retained_marker is None else self._retained_marker.last_confirmed_step
+                ),
+                marker_unreadable=self._marker_unreadable,
+            )
 
     @property
     def state(self) -> ControllerState:
@@ -222,6 +254,18 @@ class ProtocolRunner:
     def active_run_id(self) -> UUID | None:
         with self._lock:
             return self._active_run_id
+
+    @property
+    def retained_marker(self) -> "_CrashMarker | None":
+        """The interrupted run blocking new work, when one is retained."""
+
+        with self._lock:
+            return self._retained_marker
+
+    @property
+    def marker_unreadable(self) -> bool:
+        with self._lock:
+            return self._marker_unreadable
 
     def start(
         self,
@@ -243,7 +287,7 @@ class ProtocolRunner:
                         f"request ID {request_id!r} was already used for a "
                         "different protocol"
                     )
-                duplicate = StartResult(existing.status(), duplicate=True)
+                duplicate = StartResult(self._status(existing), duplicate=True)
                 self._log_event(
                     "duplicate_request_suppressed",
                     run_id=str(existing_id),
@@ -254,7 +298,7 @@ class ProtocolRunner:
                 # An active run legitimately owns a marker, so this check comes
                 # before the retained-marker check.
                 raise BusyError("another protocol run is active")
-            if self.crash_marker_path.exists():
+            if self._load_crash_marker():
                 self._reconciliation_required = True
                 self._controller_state = ControllerState.RECONCILIATION_REQUIRED
             if self._reconciliation_required:
@@ -275,13 +319,13 @@ class ProtocolRunner:
                 total_steps=len(protocol.steps),
             )
             self._executor.submit(self._execute, record, operator_confirmed_idle)
-            status = record.status()
+            status = self._status(record)
         return StartResult(status, duplicate=False)
 
     def get(self, run_id: UUID) -> RunStatus | None:
         with self._lock:
             record = self._runs.get(run_id)
-            return None if record is None else record.status()
+            return None if record is None else self._status(record)
 
     def abort(self, run_id: UUID) -> RunStatus | None:
         """Request a cooperative stop between steps.
@@ -298,7 +342,7 @@ class ProtocolRunner:
                 record.abort_requested = True
                 record.state = RunState.ABORTING
                 self._controller_state = ControllerState.ABORTING
-            status = record.status()
+            status = self._status(record)
         self._log_event("abort_requested", run_id=str(run_id))
         return status
 
@@ -372,6 +416,8 @@ class ProtocolRunner:
             controller_state = self._controller_state
             reconciliation_required = self._reconciliation_required
             active_run_id = self._active_run_id
+            retained = self._retained_marker
+            marker_unreadable = self._marker_unreadable
         self._log_event(
             "device_inspected",
             connected=connected,
@@ -394,6 +440,12 @@ class ProtocolRunner:
             modules=modules,
             program_step_state=program_step_state,
             program_step_error_code=program_step_error_code,
+            retained_run_id=None if retained is None else retained.run_id,
+            retained_last_confirmed_step=(
+                None if retained is None else retained.last_confirmed_step
+            ),
+            retained_interrupted_at=None if retained is None else retained.updated_at,
+            marker_unreadable=marker_unreadable,
             error=error,
         )
 
@@ -438,22 +490,32 @@ class ProtocolRunner:
         return state
 
     def shutdown(self) -> None:
+        """Stop accepting work and wind the worker down promptly.
+
+        The stop flag reaches the driver's status-poll loop, which would
+        otherwise hold teardown open for the full completion timeout and make
+        Ctrl+C on the service look like a hang. A run interrupted this way ends
+        as `unknown_execution_state` and keeps its marker, which is correct: we
+        stopped watching before the instrument reported Ready.
+        """
+
         with self._lock:
             self._closed = True
-        self._executor.shutdown(wait=True, cancel_futures=False)
+        self.driver.stop_requested.set()
+        self._executor.shutdown(wait=True, cancel_futures=True)
         self.driver.close()
         with self._lock:
             self._controller_state = ControllerState.CLOSED
 
+    _MOTION_STEPS = (PeristalticDispense, PeristalticPrime, PeristalticPurge)
+
     def _execute(self, record: _RunRecord, operator_confirmed_idle: bool) -> None:
+        """Set up, run the steps, and classify the outcome exactly once."""
+
         driver_opened = False
         marker_started = False
         try:
-            with self._lock:
-                abort_before_open = record.abort_requested
-                if not abort_before_open:
-                    record.state = RunState.RUNNING
-            if abort_before_open:
+            if self._aborted(record, set_running=True):
                 self._finish_without_reconciliation(record, RunState.ABORTED)
                 return
             self._log_event(
@@ -468,74 +530,28 @@ class ProtocolRunner:
                 operator_confirmed_idle=operator_confirmed_idle,
             )
             requires_peristaltic = any(
-                isinstance(
-                    step,
-                    (PeristalticDispense, PeristalticPrime, PeristalticPurge),
-                )
-                for step in record.protocol.steps
+                isinstance(step, self._MOTION_STEPS) for step in record.protocol.steps
             )
-            self.driver.prepare_motion(
+            motion_info = self.driver.prepare_motion(
                 require_primary_peristaltic=requires_peristaltic,
             )
             self.driver.validate_protocol(record.protocol)
 
-            with self._lock:
-                abort_before_motion = record.abort_requested
-            if abort_before_motion:
+            if self._aborted(record):
                 self._finish_without_reconciliation(record, RunState.ABORTED)
                 return
 
             self._write_crash_marker(record, current_step=None)
             marker_started = True
 
-            for index, step in enumerate(record.protocol.steps):
-                with self._lock:
-                    if record.abort_requested:
-                        abort_before_step = True
-                    else:
-                        abort_before_step = False
-                        record.current_step = index
-                if abort_before_step:
-                    self._finish_without_reconciliation(record, RunState.ABORTED)
-                    return
-
-                self._write_crash_marker(record, current_step=index)
-                self._log_event(
-                    "step_started",
-                    run_id=str(record.run_id),
-                    step_index=index,
-                    operation=step.operation,
-                    request=step.model_dump(mode="json"),
-                )
-                exchange = self._execute_step(step)
-                result = StepResult(
-                    step_index=index,
-                    operation=step.operation,
-                    device_status=int.from_bytes(exchange.response.body[:2], "little"),
-                    indication_count=len(exchange.indications),
-                )
-                with self._lock:
-                    record.results.append(result)
-                    record.completed_steps += 1
-                    record.current_step = None
-                    abort_after_step = record.abort_requested
-                self._write_crash_marker(record, current_step=None)
-                self._log_event(
-                    "step_completed",
-                    run_id=str(record.run_id),
-                    step_index=index,
-                    operation=step.operation,
-                    response={
-                        "device_status": result.device_status,
-                        "indication_count": result.indication_count,
-                        "completion_status": "ready",
-                    },
-                )
-                if abort_after_step:
-                    self._finish_without_reconciliation(record, RunState.ABORTED)
-                    return
-
-            self._finish_without_reconciliation(record, RunState.COMPLETED)
+            completed = self._run_steps(
+                record,
+                installed_cassette=motion_info.modules.primary_cassette,
+            )
+            self._finish_without_reconciliation(
+                record,
+                RunState.COMPLETED if completed else RunState.ABORTED,
+            )
         except UnknownExecutionState as error:
             self._finish_with_error(
                 record,
@@ -557,18 +573,114 @@ class ProtocolRunner:
                 if self._active_run_id == record.run_id:
                     self._active_run_id = None
 
+    def _run_steps(self, record: _RunRecord, *, installed_cassette: CassetteType) -> bool:
+        """Execute every step in order. Returns False if an abort stopped it.
+
+        Abort is cooperative: it is honoured between steps only, because no
+        instrument-side cancel command has been recovered.
+        """
+
+        for index, step in enumerate(record.protocol.steps):
+            if self._aborted(record, current_step=index):
+                return False
+
+            self._write_crash_marker(record, current_step=index)
+            self._log_event(
+                "step_started",
+                run_id=str(record.run_id),
+                step_index=index,
+                operation=step.operation,
+                request=step.model_dump(mode="json"),
+            )
+            exchange = self._execute_step(step)
+            result = StepResult(
+                step_index=index,
+                operation=step.operation,
+                device_status=int.from_bytes(exchange.response.body[:2], "little"),
+                indication_count=len(exchange.indications),
+            )
+            self._notify_step_completed(record, index, step, result, installed_cassette)
+
+            with self._lock:
+                record.results.append(result)
+                record.completed_steps += 1
+                record.current_step = None
+                abort_after_step = record.abort_requested
+            self._write_crash_marker(record, current_step=None)
+            self._log_event(
+                "step_completed",
+                run_id=str(record.run_id),
+                step_index=index,
+                operation=step.operation,
+                response={
+                    "device_status": result.device_status,
+                    "indication_count": result.indication_count,
+                    "completion_status": "ready",
+                },
+            )
+            if abort_after_step:
+                return False
+        return True
+
+    def _aborted(
+        self,
+        record: _RunRecord,
+        *,
+        current_step: int | None = None,
+        set_running: bool = False,
+    ) -> bool:
+        """Check for a pending abort, marking the next step if there is none."""
+
+        with self._lock:
+            if record.abort_requested:
+                return True
+            if set_running:
+                record.state = RunState.RUNNING
+            if current_step is not None:
+                record.current_step = current_step
+            return False
+
+    def _notify_step_completed(
+        self,
+        record: _RunRecord,
+        index: int,
+        step: ProtocolStep,
+        result: StepResult,
+        installed_cassette: CassetteType,
+    ) -> None:
+        if self._on_step_completed is None:
+            return
+        try:
+            self._on_step_completed(
+                record.run_id,
+                index,
+                step,
+                result,
+                installed_cassette,
+            )
+        except Exception as callback_error:
+            # Accounting/telemetry must never turn confirmed motion into a
+            # failed or ambiguous protocol result.
+            self._log_event(
+                "step_completion_callback_failed",
+                run_id=str(record.run_id),
+                step_index=index,
+                error=f"{type(callback_error).__name__}: {callback_error}",
+            )
+
+    _STEP_DISPATCH = {
+        PeristalticDispense: "peristaltic_dispense",
+        PeristalticPrime: "peristaltic_prime",
+        PeristalticPurge: "peristaltic_purge",
+        Shake: "shake",
+        Soak: "soak",
+    }
+
     def _execute_step(self, step: ProtocolStep) -> ExchangeResult:
-        if isinstance(step, PeristalticDispense):
-            return self.driver.peristaltic_dispense(step)
-        if isinstance(step, PeristalticPrime):
-            return self.driver.peristaltic_prime(step)
-        if isinstance(step, PeristalticPurge):
-            return self.driver.peristaltic_purge(step)
-        if isinstance(step, Shake):
-            return self.driver.shake(step)
-        if isinstance(step, Soak):
-            return self.driver.soak(step)
-        raise TypeError(f"unsupported protocol step {type(step).__name__}")
+        method = self._STEP_DISPATCH.get(type(step))
+        if method is None:
+            raise TypeError(f"unsupported protocol step {type(step).__name__}")
+        return getattr(self.driver, method)(step)
 
     def _finish_without_reconciliation(
         self,
@@ -602,7 +714,9 @@ class ProtocolRunner:
             record.error = str(error)
             if not reconciliation_required:
                 record.current_step = None
-            if reconciliation_required or self.crash_marker_path.exists():
+            # Load rather than stat, so health and the reconcile tool can name
+            # the interrupted run instead of only saying that one exists.
+            if self._load_crash_marker() or reconciliation_required:
                 self._reconciliation_required = True
                 self._controller_state = ControllerState.RECONCILIATION_REQUIRED
             else:
@@ -649,11 +763,50 @@ class ProtocolRunner:
 
     def _clear_crash_marker(self) -> None:
         self.crash_marker_path.unlink(missing_ok=True)
+        self._retained_marker = None
+        self._marker_unreadable = False
+
+    def _load_crash_marker(self) -> bool:
+        """Read a retained marker so reconciliation can say what was interrupted.
+
+        Returns whether a marker is present. An unreadable marker still blocks:
+        a file we cannot parse is not evidence that the last run finished.
+        """
+
+        if not self.crash_marker_path.exists():
+            self._retained_marker = None
+            self._marker_unreadable = False
+            return False
+        try:
+            payload = json.loads(self.crash_marker_path.read_text(encoding="utf-8"))
+            self._retained_marker = _CrashMarker.model_validate(payload)
+            self._marker_unreadable = False
+        except Exception as error:
+            self._retained_marker = None
+            self._marker_unreadable = True
+            self._log_event(
+                "crash_marker_unreadable",
+                path=str(self.crash_marker_path),
+                error=f"{type(error).__name__}: {error}",
+            )
+        return True
+
+    def _status(self, record: _RunRecord) -> RunStatus:
+        """Run status plus the last state the instrument reported."""
+
+        status = record.status()
+        last = self.driver.last_status
+        if last is None:
+            return status
+        observed_at = self.driver.last_status_at
+        age = None if observed_at is None else round(time.monotonic() - observed_at, 3)
+        return status.model_copy(
+            update={
+                "device_state": last.state.name.lower(),
+                "device_error_code": last.error_code,
+                "device_state_age_seconds": age,
+            }
+        )
 
     def _log_event(self, event: str, **fields: object) -> None:
-        payload = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "event": event,
-            **fields,
-        }
-        self._logger.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+        log_event(self._logger, event, **fields)

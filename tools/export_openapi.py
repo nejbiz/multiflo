@@ -9,14 +9,14 @@ from pathlib import Path
 from multiflo.api import create_app
 from multiflo.driver import MultiFloDriver
 from multiflo.runner import ProtocolRunner
-from multiflo.transport import ScriptedFakeTransport
+from multiflo.transport import NullTransport
 
 
 def openapi_document(expected_serial: str = "unset") -> dict:
     """Build the schema with a scripted transport that is never opened."""
 
     runner = ProtocolRunner(
-        MultiFloDriver(ScriptedFakeTransport(), expected_product_serial=expected_serial)
+        MultiFloDriver(NullTransport(), expected_product_serial=expected_serial)
     )
     try:
         return create_app(runner).openapi()

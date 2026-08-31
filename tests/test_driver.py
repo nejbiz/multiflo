@@ -20,7 +20,13 @@ from multiflo.driver import (
     ProgramStepState,
     ReadOnlyDeviceInfo,
 )
-from multiflo.errors import DeviceError, ProtocolError, TransportError, UnknownExecutionState
+from multiflo.errors import (
+    DeviceError,
+    PreconditionError,
+    ProtocolError,
+    TransportError,
+    UnknownExecutionState,
+)
 from multiflo.models import (
     CassetteType,
     PeristalticDispense,
@@ -29,7 +35,7 @@ from multiflo.models import (
     Protocol,
     Shake,
 )
-from multiflo.transport import ScriptedFakeTransport
+from multiflo.tests.fakes import ScriptedFakeTransport
 
 
 def response(command: int = 0x0073, message_id: int = 0, body: bytes = b"\x00\x00") -> bytes:
@@ -67,18 +73,22 @@ class DriverTests(unittest.TestCase):
             InstalledModules(True, False, True, CassetteType.FIVE_UL),
         )
 
-        with self.assertRaisesRegex(ProtocolError, "step 1 requires 1ul"):
+        with self.assertRaisesRegex(PreconditionError, "step 1 requires 1ul"):
             driver.validate_protocol(
                 Protocol(
                     name="cassette conflict",
                     steps=[
-                        PeristalticDispense(volume_ul=100, cassette_type="5ul"),
+                        PeristalticDispense(
+                            volume_ul=100,
+                            cassette_type="5ul",
+                            plate_type="96_well",
+                        ),
                         PeristalticPrime(volume_ul=100, cassette_type="1ul"),
                     ],
                 )
             )
 
-        with self.assertRaisesRegex(ProtocolError, "step 0.*between 5 and 2500"):
+        with self.assertRaisesRegex(PreconditionError, "step 0.*between 5 and 2500"):
             driver.validate_protocol(
                 Protocol(
                     name="resolved any cassette",
@@ -276,7 +286,7 @@ class DriverTests(unittest.TestCase):
         fake = ScriptedFakeTransport(reads)
         with MultiFloDriver(fake, expected_product_serial="14071419") as driver:
             driver.authorize_motion(operator_confirmed_idle=True)
-            with self.assertRaisesRegex(ProtocolError, "busy, not ready"):
+            with self.assertRaisesRegex(PreconditionError, "busy, not ready"):
                 driver.prepare_motion()
 
     def test_end_batch_recovery_is_busy_only_and_sent_once(self) -> None:
@@ -303,7 +313,7 @@ class DriverTests(unittest.TestCase):
             expected_writes=[encode_request(0x0092, 0)],
         )
         with MultiFloDriver(ready_fake) as driver:
-            with self.assertRaisesRegex(ProtocolError, "requires busy state"):
+            with self.assertRaisesRegex(PreconditionError, "requires busy state"):
                 driver.recover_end_batch(operator_confirmed_stationary=True)
         ready_fake.assert_script_consumed()
 
@@ -320,19 +330,19 @@ class DriverTests(unittest.TestCase):
 
     def test_timeout(self) -> None:
         fake = ScriptedFakeTransport([], expected_writes=[encode_request(0x0073)])
-        with MultiFloDriver(fake) as driver:
+        with MultiFloDriver(fake, read_only_attempts=1) as driver:
             with self.assertRaisesRegex(TransportError, "timed out"):
                 driver.communication_test()
 
     def test_nak_is_a_device_error(self) -> None:
         fake = ScriptedFakeTransport([b"\x15"])
-        with MultiFloDriver(fake) as driver:
+        with MultiFloDriver(fake, read_only_attempts=1) as driver:
             with self.assertRaisesRegex(DeviceError, "NAK"):
                 driver.communication_test()
 
     def test_nonzero_device_status(self) -> None:
         fake = ScriptedFakeTransport([response(body=b"\x07\x81")])
-        with MultiFloDriver(fake) as driver:
+        with MultiFloDriver(fake, read_only_attempts=1) as driver:
             with self.assertRaisesRegex(DeviceError, "0x8107"):
                 driver.communication_test()
 
@@ -341,7 +351,7 @@ class DriverTests(unittest.TestCase):
             [response()[:5], TransportError("device disconnected")],
             expected_writes=[encode_request(0x0073)],
         )
-        with MultiFloDriver(fake) as driver:
+        with MultiFloDriver(fake, read_only_attempts=1) as driver:
             with self.assertRaisesRegex(TransportError, "disconnected"):
                 driver.communication_test()
 
@@ -349,13 +359,13 @@ class DriverTests(unittest.TestCase):
         packet = bytearray(response())
         packet[10] ^= 1
         fake = ScriptedFakeTransport([bytes(packet)])
-        with MultiFloDriver(fake) as driver:
+        with MultiFloDriver(fake, read_only_attempts=1) as driver:
             with self.assertRaisesRegex(ProtocolError, "checksum"):
                 driver.communication_test()
 
     def test_mismatched_command(self) -> None:
         fake = ScriptedFakeTransport([response(command=0x0074)])
-        with MultiFloDriver(fake) as driver:
+        with MultiFloDriver(fake, read_only_attempts=1) as driver:
             with self.assertRaisesRegex(ProtocolError, "does not match"):
                 driver.communication_test()
 
@@ -377,7 +387,7 @@ class DriverTests(unittest.TestCase):
             b"\x00\x00",
         ).encode()
         fake = ScriptedFakeTransport([bytes((0x06,)), indication, planned_response])
-        with MultiFloDriver(fake) as driver:
+        with MultiFloDriver(fake, read_only_attempts=1) as driver:
             result = driver.communication_test()
         self.assertEqual(len(result.indications), 1)
 

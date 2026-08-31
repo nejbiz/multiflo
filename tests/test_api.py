@@ -28,7 +28,7 @@ from multiflo.models import (
     Soak,
 )
 from multiflo.runner import ProtocolRunner
-from multiflo.transport import ScriptedFakeTransport
+from multiflo.tests.fakes import ScriptedFakeTransport, write_marker
 
 
 def response(command: int, body: bytes = b"\x00\x00") -> bytes:
@@ -262,7 +262,7 @@ class ApiTests(unittest.TestCase):
     def test_retained_crash_marker_blocks_api_motion(self) -> None:
         with TemporaryDirectory() as directory:
             marker_path = Path(directory) / "active-run.json"
-            marker_path.write_text("{}\n", encoding="utf-8")
+            write_marker(marker_path)
             fake = ScriptedFakeTransport()
             runner = ProtocolRunner(
                 MultiFloDriver(fake, expected_product_serial="14071419"),
@@ -412,6 +412,7 @@ class ApiTests(unittest.TestCase):
                                 "operation": "peristaltic_dispense",
                                 "volume_ul": 100,
                                 "cassette_type": "5ul",
+                                "plate_type": "96_well",
                             },
                             {
                                 "operation": "peristaltic_prime",

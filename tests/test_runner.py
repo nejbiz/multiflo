@@ -7,81 +7,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import time
 import unittest
-from threading import Event
 
-from multiflo.codec import Frame, MessageClass
-from multiflo.driver import ExchangeResult, ProgramStepState, ProgramStepStatus
+from multiflo.driver import ProgramStepState
 from multiflo.errors import BusyError, UnknownExecutionState
 from multiflo.models import PeristalticDispense, Protocol
-from multiflo.runner import ControllerState, ProtocolRunner, RunState
+from multiflo.runner import ControllerState, ProtocolRunner, RunState, TERMINAL_STATES
 
-
-class BlockingDriver:
-    def __init__(self) -> None:
-        self.motion_started = Event()
-        self.release_motion = Event()
-        self.motion_calls = 0
-
-    def open(self) -> None:
-        pass
-
-    def close(self) -> None:
-        self.release_motion.set()
-
-    def authorize_motion(self, *, operator_confirmed_idle: bool) -> None:
-        if not operator_confirmed_idle:
-            raise RuntimeError("confirmation missing")
-
-    def prepare_motion(self, *, require_primary_peristaltic: bool = True) -> None:
-        pass
-
-    def validate_protocol(self, protocol: Protocol) -> None:
-        pass
-
-    def peristaltic_dispense(self, step: PeristalticDispense) -> ExchangeResult:
-        self.motion_calls += 1
-        self.motion_started.set()
-        self.release_motion.wait(timeout=2)
-        return ExchangeResult(
-            Frame(MessageClass.REQUEST, 0, 0x008F, 0, 0, b"\x00\x00"),
-            (),
-        )
-
-
-class ImmediateDriver(BlockingDriver):
-    def peristaltic_dispense(self, step: PeristalticDispense) -> ExchangeResult:
-        self.motion_calls += 1
-        return ExchangeResult(
-            Frame(MessageClass.REQUEST, 0, 0x008F, 0, 0, b"\x00\x00"),
-            (),
-        )
-
-
-class SecondStepUnknownDriver(ImmediateDriver):
-    def peristaltic_dispense(self, step: PeristalticDispense) -> ExchangeResult:
-        self.motion_calls += 1
-        if self.motion_calls == 2:
-            raise UnknownExecutionState("simulated post-send disconnect")
-        return ExchangeResult(
-            Frame(MessageClass.REQUEST, 0, 0x008F, 0, 0, b"\x00\x00"),
-            (),
-        )
-
-
-class ReconciliationDriver:
-    def __init__(self, state: ProgramStepState) -> None:
-        self.state = state
-        self.query_count = 0
-
-    def open(self) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
-
-    def query_program_step_status(self) -> ProgramStepStatus:
-        self.query_count += 1
-        return ProgramStepStatus(self.state, 0, 0)
+from multiflo.tests.fakes import FakeDriver, write_marker
 
 
 class RunnerTests(unittest.TestCase):
@@ -96,18 +28,13 @@ class RunnerTests(unittest.TestCase):
         final = None
         for _ in range(100):
             final = runner.get(run_id)
-            if final is not None and final.state in {
-                RunState.COMPLETED,
-                RunState.ABORTED,
-                RunState.FAILED,
-                RunState.UNKNOWN_EXECUTION_STATE,
-            }:
+            if final is not None and final.state in TERMINAL_STATES:
                 return final
             time.sleep(0.01)
         self.fail("run did not reach a terminal state")
 
     def test_abort_is_cooperative_and_does_not_cancel_in_flight_motion(self) -> None:
-        driver = BlockingDriver()
+        driver = FakeDriver(block=True, release_on_close=True)
         runner = ProtocolRunner(  # type: ignore[arg-type]
             driver,
             crash_marker_path=self.marker_path,
@@ -141,8 +68,47 @@ class RunnerTests(unittest.TestCase):
         finally:
             runner.shutdown()
 
+    def test_completed_step_callback_receives_resolved_cassette(self) -> None:
+        driver = FakeDriver()
+        completed = []
+        runner = ProtocolRunner(  # type: ignore[arg-type]
+            driver,
+            crash_marker_path=self.marker_path,
+            on_step_completed=lambda *args: completed.append(args),
+        )
+        protocol = Protocol(
+            name="usage callback",
+            steps=[
+                PeristalticDispense(
+                    volume_ul=100,
+                    cassette_type="5ul",
+                    pre_dispense_volume_ul=0,
+                    pre_dispense_cycles=0,
+                )
+            ],
+        )
+        try:
+            started = runner.start(
+                protocol,
+                operator_confirmed_idle=True,
+                request_id="usage-callback",
+            ).status
+            final = self.wait_for_terminal(runner, started.run_id)
+            self.assertEqual(final.state, RunState.COMPLETED)
+            self.assertEqual(len(completed), 1)
+            run_id, step_index, step, result, cassette = completed[0]
+            self.assertEqual(run_id, started.run_id)
+            self.assertEqual(step_index, 0)
+            self.assertEqual(step.operation, "peristaltic_dispense")
+            self.assertEqual(result.device_status, 0)
+            self.assertEqual(cassette.value, "5ul")
+        finally:
+            runner.shutdown()
+
     def test_unknown_execution_preserves_marker_and_blocks_restart(self) -> None:
-        driver = SecondStepUnknownDriver()
+        driver = FakeDriver(
+            fail_on=(2, UnknownExecutionState("simulated post-send disconnect"))
+        )
         runner = ProtocolRunner(  # type: ignore[arg-type]
             driver,
             crash_marker_path=self.marker_path,
@@ -172,7 +138,7 @@ class RunnerTests(unittest.TestCase):
         finally:
             runner.shutdown()
 
-        reconciliation_driver = ReconciliationDriver(ProgramStepState.READY)
+        reconciliation_driver = FakeDriver(program_step_state=ProgramStepState.READY)
         restarted = ProtocolRunner(  # type: ignore[arg-type]
             reconciliation_driver,
             crash_marker_path=self.marker_path,
@@ -198,8 +164,8 @@ class RunnerTests(unittest.TestCase):
             restarted.shutdown()
 
     def test_non_ready_reconciliation_retains_marker(self) -> None:
-        self.marker_path.write_text("{}\n", encoding="utf-8")
-        driver = ReconciliationDriver(ProgramStepState.BUSY)
+        write_marker(self.marker_path)
+        driver = FakeDriver(program_step_state=ProgramStepState.BUSY)
         runner = ProtocolRunner(  # type: ignore[arg-type]
             driver,
             crash_marker_path=self.marker_path,
@@ -213,8 +179,8 @@ class RunnerTests(unittest.TestCase):
             runner.shutdown()
 
     def test_operator_acknowledgement_can_clear_startup_marker(self) -> None:
-        self.marker_path.write_text("{}\n", encoding="utf-8")
-        driver = ReconciliationDriver(ProgramStepState.BUSY)
+        write_marker(self.marker_path)
+        driver = FakeDriver(program_step_state=ProgramStepState.BUSY)
         runner = ProtocolRunner(  # type: ignore[arg-type]
             driver,
             crash_marker_path=self.marker_path,
@@ -236,7 +202,7 @@ class RunnerTests(unittest.TestCase):
         logger.handlers = [handler]
         logger.propagate = False
         logger.setLevel(logging.INFO)
-        driver = ImmediateDriver()
+        driver = FakeDriver()
         runner = ProtocolRunner(  # type: ignore[arg-type]
             driver,
             crash_marker_path=self.marker_path,

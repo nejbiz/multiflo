@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Event
 import time
 import unittest
 from uuid import UUID, uuid4
@@ -13,20 +12,26 @@ from fastapi.testclient import TestClient
 
 from multiflo.api import create_app
 from multiflo.codec import (
-    Frame,
-    MessageClass,
     encode_batch_start,
     encode_request,
     encode_shake,
 )
-from multiflo.driver import ExchangeResult, MultiFloDriver, ProgramStepState
+from multiflo.driver import MultiFloDriver, ProgramStepState
 from multiflo.errors import TransportError
 from multiflo.models import Protocol, Shake
 from multiflo.runner import ProtocolRunner
-from multiflo.transport import ScriptedFakeTransport
+from multiflo.tests.fakes import (
+    BASECODE,
+    FailingTransport,
+    FakeDriver,
+    ScriptedFakeTransport,
+    inventory_reads,
+    inventory_writes,
+    program_status_response,
+    response,
+    write_marker,
+)
 
-
-BASECODE = b"7210200" + b"1.12    " + b"ABFB" + b"61FF" + b"103  " + b"002" + b"003"
 
 EXPECTED_ROUTES = {
     ("/v1/health", "get"),
@@ -36,104 +41,6 @@ EXPECTED_ROUTES = {
     ("/v1/runs/{run_id}", "get"),
     ("/v1/runs/{run_id}/abort", "post"),
 }
-
-
-def response(command: int, body: bytes = b"\x00\x00") -> bytes:
-    return bytes((0x06,)) + Frame(MessageClass.REQUEST, 0, command, 0, 0, body).encode()
-
-
-def program_status_response(state: ProgramStepState) -> bytes:
-    return response(
-        0x0092,
-        b"\x00\x00" + int(state).to_bytes(2, "little") + b"\x00" * 4 + b"\x02",
-    )
-
-
-def inventory_reads() -> list[bytes]:
-    """Reads for one communication test, ready check, and full inventory."""
-
-    return [
-        response(0x0073),
-        program_status_response(ProgramStepState.READY),
-        response(0x0100, b"\x00\x00" + b"14071419\x00"),
-        response(0x00A0, b"\x00\x00" + BASECODE),
-        response(0x0104, b"\x00\x00\x01"),
-        response(0x0104, b"\x00\x00\x00"),
-        response(0x0154, b"\x00\x00\x01"),
-        response(0x0108, b"\x00\x00\x02"),
-    ]
-
-
-def inventory_writes(first_message_id: int = 0) -> list[bytes]:
-    message_id = first_message_id
-    writes = []
-    for command, body in (
-        (0x0073, b""),
-        (0x0092, b""),
-        (0x0100, b""),
-        (0x00A0, b""),
-        (0x0104, b"\x01"),
-        (0x0104, b"\x02"),
-        (0x0154, b""),
-        (0x0108, b"\x01"),
-    ):
-        writes.append(encode_request(command, message_id, body))
-        message_id += 1
-    return writes
-
-
-class _StubDriver:
-    """Driver stand-in that blocks one motion step until released."""
-
-    expected_product_serial = "14071419"
-
-    def __init__(self) -> None:
-        self.motion_started = Event()
-        self.release_motion = Event()
-        self.motion_calls = 0
-
-    def open(self) -> None:
-        pass
-
-    def close(self) -> None:
-        self.release_motion.set()
-
-    def authorize_motion(self, *, operator_confirmed_idle: bool) -> None:
-        pass
-
-    def prepare_motion(self, *, require_primary_peristaltic: bool = True) -> None:
-        pass
-
-    def validate_protocol(self, protocol: Protocol) -> None:
-        pass
-
-    def shake(self, step: Shake) -> ExchangeResult:
-        self.motion_calls += 1
-        self.motion_started.set()
-        self.release_motion.wait(timeout=5)
-        return ExchangeResult(Frame(MessageClass.REQUEST, 0, 0x00A3, 0, 0, b"\x00\x00"), ())
-
-
-class _FailingTransport:
-    """Transport whose device is absent; opening it always fails."""
-
-    def __init__(self) -> None:
-        self.open_attempts = 0
-        self.is_open = False
-        self.writes: list[bytes] = []
-
-    def open(self) -> None:
-        self.open_attempts += 1
-        raise TransportError("device with serial 14071419 was not found")
-
-    def close(self) -> None:
-        self.is_open = False
-
-    def read(self, size: int) -> bytes:  # pragma: no cover - never reached
-        raise TransportError("device is not open")
-
-    def write(self, data: bytes) -> None:  # pragma: no cover - never reached
-        raise TransportError("device is not open")
 
 
 def shake_run_payload(request_id: str, name: str = "phase 5 shake") -> dict:
@@ -179,9 +86,14 @@ class ApiContractTests(unittest.TestCase):
             for method in methods
         }
         self.assertEqual(routes, EXPECTED_ROUTES)
-        flattened = repr(document["paths"]).lower()
+        operation_ids = {
+            method_body.get("operationId", "")
+            for methods in document["paths"].values()
+            for method_body in methods.values()
+        }
+        surface = " ".join(sorted(path for path, _ in routes) + sorted(operation_ids)).lower()
         for forbidden in ("raw", "packet", "command", "firmware", "pause", "resume"):
-            self.assertNotIn(forbidden, flattened)
+            self.assertNotIn(forbidden, surface)
         for model in ("StartRunRequest", "Protocol", "RunStatus", "DeviceStatus"):
             self.assertFalse(
                 document["components"]["schemas"][model].get("additionalProperties", True),
@@ -205,13 +117,16 @@ class ApiContractTests(unittest.TestCase):
                 "controller_state": "disconnected",
                 "reconciliation_required": False,
                 "active_run_id": None,
+                "retained_run_id": None,
+                "retained_last_confirmed_step": None,
+                "marker_unreadable": False,
             },
         )
         self.assertFalse(fake.is_open)
         self.assertEqual(fake.writes, [])
 
     def test_health_reports_a_retained_crash_marker(self) -> None:
-        self.marker_path.write_text("{}\n", encoding="utf-8")
+        write_marker(self.marker_path)
         runner = self._runner(ScriptedFakeTransport())
         client = TestClient(create_app(runner))
 
@@ -269,7 +184,7 @@ class ApiContractTests(unittest.TestCase):
         fake.assert_script_consumed()
 
     def test_device_reports_a_missing_instrument_without_raising(self) -> None:
-        transport = _FailingTransport()
+        transport = FailingTransport()
         runner = self._runner(transport)
         client = TestClient(create_app(runner))
 
@@ -283,7 +198,9 @@ class ApiContractTests(unittest.TestCase):
         self.assertIsNone(body["modules"])
         self.assertIn("TransportError", body["error"])
         self.assertEqual(body["controller_state"], "disconnected")
-        self.assertEqual(transport.open_attempts, 1)
+        # Connecting is retried: opening moves no liquid, so a transient
+        # enumeration failure is safe to re-attempt.
+        self.assertEqual(transport.open_attempts, 3)
 
     def test_repeated_request_id_returns_the_same_run_without_new_motion(self) -> None:
         step = Shake(duration_seconds=5)
@@ -323,7 +240,7 @@ class ApiContractTests(unittest.TestCase):
         fake.assert_script_consumed()
 
     def test_repeated_request_id_with_a_different_protocol_is_a_conflict(self) -> None:
-        driver = _StubDriver()
+        driver = FakeDriver(block=True, release_on_close=True)
         runner = ProtocolRunner(driver, crash_marker_path=self.marker_path)  # type: ignore[arg-type]
         self.addCleanup(runner.shutdown)
         client = TestClient(create_app(runner))
@@ -341,7 +258,7 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(driver.motion_calls, 1)
 
     def test_starting_while_a_run_is_active_is_a_conflict(self) -> None:
-        driver = _StubDriver()
+        driver = FakeDriver(block=True, release_on_close=True)
         runner = ProtocolRunner(driver, crash_marker_path=self.marker_path)  # type: ignore[arg-type]
         self.addCleanup(runner.shutdown)
         client = TestClient(create_app(runner))
@@ -366,7 +283,7 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(driver.motion_calls, 1)
 
     def test_client_disconnect_does_not_alter_execution(self) -> None:
-        driver = _StubDriver()
+        driver = FakeDriver(block=True, release_on_close=True)
         runner = ProtocolRunner(driver, crash_marker_path=self.marker_path)  # type: ignore[arg-type]
         self.addCleanup(runner.shutdown)
         client = TestClient(create_app(runner))

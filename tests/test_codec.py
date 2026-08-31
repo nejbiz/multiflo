@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from multiflo.codec import (
     Endpoint,
@@ -27,11 +28,22 @@ from multiflo.models import (
 from multiflo.errors import ProtocolError
 
 
-COMMUNICATION_TEST_PACKET = bytes.fromhex("01 02 73 00 01 00 00 00 00 89 FF")
-DISPENSE_PACKET = bytes.fromhex(
-    "01 02 8F 00 01 00 00 18 00 40 F8 "
-    "05 64 00 01 00 00 00 A1 03 0A 00 02 FF FF FF FF FF FF 00 01 00 00 00 00"
-)
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def load_fixture(name: str) -> bytes:
+    """Read a recorded packet from tests/fixtures.
+
+    These files are the recovered captures. Reading them here rather than
+    restating the bytes inline means the fixture and the assertion cannot
+    drift apart.
+    """
+
+    return bytes.fromhex((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+COMMUNICATION_TEST_PACKET = load_fixture("communication_test_request.hex")
+DISPENSE_PACKET = load_fixture("calib1_dispense_request.hex")
 
 
 class CodecTests(unittest.TestCase):
@@ -47,14 +59,7 @@ class CodecTests(unittest.TestCase):
             "FF FF FF FF FF FF 00 01 00 00 00 00"
         )
         self.assertEqual(encode_peristaltic_dispense(step), body)
-        self.assertEqual(
-            encode_request(0x008F, body=body),
-            bytes.fromhex(
-                "01 02 8F 00 01 00 00 18 00 40 F8 "
-                "05 64 00 01 00 00 00 A1 03 0A 00 02 "
-                "FF FF FF FF FF FF 00 01 00 00 00 00"
-            ),
-        )
+        self.assertEqual(encode_request(0x008F, body=body), DISPENSE_PACKET)
 
     def test_calib3_partial_deep_well_golden_body(self) -> None:
         step = PeristalticDispense(volume_ul=200, columns=(1,))
