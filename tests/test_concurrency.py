@@ -18,7 +18,7 @@ from multiflo.driver import MultiFloDriver
 from multiflo.errors import BusyError
 from multiflo.models import PeristalticDispense, Protocol
 from multiflo.runner import ControllerState, ProtocolRunner
-from multiflo.tests.fakes import FakeDriver, response, write_marker
+from tests.fakes import FakeDriver, response, write_marker
 
 
 class SerializingTransport:

@@ -28,7 +28,7 @@ from multiflo.models import (
     Soak,
 )
 from multiflo.runner import ProtocolRunner
-from multiflo.tests.fakes import ScriptedFakeTransport, write_marker
+from tests.fakes import ScriptedFakeTransport, write_marker
 
 
 def response(command: int, body: bytes = b"\x00\x00") -> bytes:

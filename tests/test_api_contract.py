@@ -20,7 +20,7 @@ from multiflo.driver import MultiFloDriver, ProgramStepState
 from multiflo.errors import TransportError
 from multiflo.models import Protocol, Shake
 from multiflo.runner import ProtocolRunner
-from multiflo.tests.fakes import (
+from tests.fakes import (
     BASECODE,
     FailingTransport,
     FakeDriver,

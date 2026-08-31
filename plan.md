@@ -184,16 +184,21 @@ Keep this only as a golden test unless a hardware test explicitly authorizes mot
 Use a small package. Start with these modules and split only when a file becomes genuinely difficult to understand:
 
 ```text
-multiflo/
+src/multiflo/
   models.py       Protocol and operation models plus validation
   codec.py        Frame, checksum, command bodies, response parsing
-  transport.py    FTDI D2XX byte transport and fake transport
+  transport.py    FTDI D2XX and serial byte transports
   driver.py       Device ownership, commands, run state, abort
+  runner.py       Sequential execution, run state, crash marker
   api.py          FastAPI schemas and routes
+  service.py      Single-worker loopback entry point
   errors.py       Small stable error set
+  logs.py         One JSON-line event format for every layer
+  tools/          Guarded hardware tools and offline helpers
+tests/            Outside the package, so it is not shipped in a wheel
 ```
 
-Development-only `.LHC` decryption/differential scripts belong under `tools/`, not in the production driver or API.
+Development-only `.LHC` decryption/differential scripts belong under `src/multiflo/tools/`, not in the production driver or API. Test doubles live in `tests/fakes.py`, never in the shipped package.
 
 Keep the boundaries simple:
 

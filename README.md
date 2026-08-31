@@ -2,6 +2,20 @@
 
 Pure Python driver work for the base BioTek MultiFlo connected through FTDI D2XX.
 
+## Layout
+
+```text
+src/multiflo/       the driver package (models, codec, transport, driver,
+                    runner, api, service, errors, logs)
+src/multiflo/tools/ guarded hardware tools and offline .LHC helpers
+tests/              outside the package, so tests are not shipped in a wheel
+protocols/          controlled .LHC fixtures and their change log
+```
+
+Import paths are unchanged by the src layout: the package is still `multiflo`
+and the tools are still `python -m multiflo.tools.<name>`. The `phase_*.md`
+reports predate the move and refer to the old top-level `tools/` path.
+
 ## Development
 
 Create/update the locked environment and run the test suite:

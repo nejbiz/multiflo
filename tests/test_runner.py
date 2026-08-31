@@ -13,7 +13,7 @@ from multiflo.errors import BusyError, UnknownExecutionState
 from multiflo.models import PeristalticDispense, Protocol
 from multiflo.runner import ControllerState, ProtocolRunner, RunState, TERMINAL_STATES
 
-from multiflo.tests.fakes import FakeDriver, write_marker
+from tests.fakes import FakeDriver, write_marker
 
 
 class RunnerTests(unittest.TestCase):

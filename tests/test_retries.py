@@ -13,7 +13,7 @@ from multiflo.codec import encode_batch_start, encode_request, encode_shake
 from multiflo.driver import MultiFloDriver, ProgramStepState
 from multiflo.errors import DeviceError, TransportError, UnknownExecutionState
 from multiflo.models import Shake
-from multiflo.tests.fakes import (
+from tests.fakes import (
     FailingTransport,
     ScriptedFakeTransport,
     device_info,

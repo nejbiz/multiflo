@@ -14,8 +14,10 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["multiflo"]
-package-dir = { multiflo = "." }
+# src layout: the package lives in src/multiflo, tests stay at the repo root
+# so they are not shipped in a wheel.
+packages = ["multiflo", "multiflo.tools"]
+package-dir = { "" = "src" }
 
 [tool.uv]
 package = true

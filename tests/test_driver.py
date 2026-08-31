@@ -35,7 +35,7 @@ from multiflo.models import (
     Protocol,
     Shake,
 )
-from multiflo.tests.fakes import ScriptedFakeTransport
+from tests.fakes import ScriptedFakeTransport
 
 
 def response(command: int = 0x0073, message_id: int = 0, body: bytes = b"\x00\x00") -> bytes:
