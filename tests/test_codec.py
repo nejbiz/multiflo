@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 
 from multiflo.codec import (
+    DEEP_WELL_DISPENSE_HEIGHT_STEPS,
+    VENDOR_DEEP_WELL_DISPENSE_HEIGHT_STEPS,
     Endpoint,
     Frame,
     FrameStreamDecoder,
@@ -53,7 +55,12 @@ class CodecTests(unittest.TestCase):
         self.assertEqual(encode_batch_start(PlateType.DEEP_WELL_96), b"\x05")
 
     def test_calib1_peristaltic_dispense_golden_packet(self) -> None:
-        step = PeristalticDispense(volume_ul=100)
+        # 929 is LHC's stock deep-well height; the project default is now 1020,
+        # so the vendor fixture is reproduced with an explicit override.
+        step = PeristalticDispense(
+            volume_ul=100,
+            dispense_height_steps=VENDOR_DEEP_WELL_DISPENSE_HEIGHT_STEPS,
+        )
         body = bytes.fromhex(
             "05 64 00 01 00 00 00 A1 03 0A 00 02 "
             "FF FF FF FF FF FF 00 01 00 00 00 00"
@@ -62,7 +69,11 @@ class CodecTests(unittest.TestCase):
         self.assertEqual(encode_request(0x008F, body=body), DISPENSE_PACKET)
 
     def test_calib3_partial_deep_well_golden_body(self) -> None:
-        step = PeristalticDispense(volume_ul=200, columns=(1,))
+        step = PeristalticDispense(
+            volume_ul=200,
+            columns=(1,),
+            dispense_height_steps=VENDOR_DEEP_WELL_DISPENSE_HEIGHT_STEPS,
+        )
         self.assertEqual(
             encode_peristaltic_dispense(step),
             bytes.fromhex(
@@ -251,6 +262,47 @@ class CodecTests(unittest.TestCase):
                         "4D 01 0A 00 02 FF FF FF FF FF FF 02 01 00 00 00 00"
                     ),
                 )
+
+    def test_deep_well_default_height_is_the_project_value(self) -> None:
+        """Deep-well dispenses default to 1020 steps, not LHC's 929."""
+
+        body = encode_peristaltic_dispense(PeristalticDispense(volume_ul=100))
+
+        self.assertEqual(DEEP_WELL_DISPENSE_HEIGHT_STEPS, 1020)
+        self.assertEqual(
+            int.from_bytes(body[7:9], "little"),
+            DEEP_WELL_DISPENSE_HEIGHT_STEPS,
+        )
+        self.assertEqual(
+            body,
+            bytes.fromhex(
+                "05 64 00 01 00 00 00 FC 03 0A 00 02 "
+                "FF FF FF FF FF FF 00 01 00 00 00 00"
+            ),
+        )
+
+    def test_other_plate_heights_are_unchanged(self) -> None:
+        for plate, cassette, expected in (
+            ("96_well", "any", 336),
+            ("384_well", "1ul", 333),
+        ):
+            with self.subTest(plate=plate):
+                body = encode_peristaltic_dispense(
+                    PeristalticDispense(
+                        volume_ul=10,
+                        plate_type=plate,
+                        cassette_type=cassette,
+                    )
+                )
+                self.assertEqual(int.from_bytes(body[7:9], "little"), expected)
+
+    def test_an_explicit_height_overrides_the_plate_default(self) -> None:
+        # calib12 raised a deep-well plate to 975 steps (44.58 mm).
+        body = encode_peristaltic_dispense(
+            PeristalticDispense(volume_ul=200, dispense_height_steps=975)
+        )
+
+        self.assertEqual(int.from_bytes(body[7:9], "little"), 975)
 
     def test_communication_test_golden_packet(self) -> None:
         self.assertEqual(encode_request(0x0073), COMMUNICATION_TEST_PACKET)

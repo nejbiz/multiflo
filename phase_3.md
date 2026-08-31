@@ -92,8 +92,21 @@ cassette setting.
 ### Plate geometry and position maps
 
 The recovered dispense heights are 333 steps for 384-well, 336 for standard
-96-well, and 929 for the supported 96-deep-well geometry. These are selected by
-plate type. A public custom Z/height override is not exposed.
+96-well, and 929 for the 96-deep-well geometry, selected by plate type.
+
+The deep-well default is deliberately raised to **1020** steps for the plates
+in use here, rather than adjusting it per run. A step is roughly 0.0457 mm
+(calib12 records 975 steps as 44.58 mm above the carrier), so 1020 sits about
+4 mm higher than LHC's stock value. Height is measured above the carrier, so a
+larger number is further from the plate; raising a default is the safe
+direction.
+
+`dispense_height_steps` overrides the plate default for a plate whose depth
+differs from the standard geometry, bounded to 100-2000 steps as a
+conservative guard around the observed 333-975 range. It is `None` by default.
+The calib1 and calib3 golden tests pass the vendor value 929 explicitly, so
+they still prove byte-for-byte agreement with LHC through framing and
+checksum.
 
 All-column maps are supported for every plate type, and partial column
 selection is supported for all three geometries. See the calib30-calib32

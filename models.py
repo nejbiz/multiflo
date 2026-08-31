@@ -83,6 +83,12 @@ class PeristalticDispense(BaseModel):
     row_sections: Literal["all", "odd", "even"] = "all"
     x_offset_steps: int = Field(default=0, ge=-60, le=60)
     y_offset_steps: int = Field(default=0, ge=-40, le=40)
+    # Height above the carrier in instrument steps. None uses the plate
+    # default (see codec._DISPENSE_HEIGHTS). Set this only for a plate whose
+    # depth differs from the standard geometry: a value lower than the plate
+    # default brings the manifold closer to the carrier. The bounds are a
+    # conservative guard around the observed 333-975 range, not a manual limit.
+    dispense_height_steps: int | None = Field(default=None, ge=100, le=2000)
 
     @model_validator(mode="after")
     def validate_dispense(self) -> "PeristalticDispense":

@@ -34,10 +34,20 @@ _PLATE_CODES = {
     PlateType.WELL_96: 4,
     PlateType.DEEP_WELL_96: 5,
 }
+# Dispense height above the carrier, in instrument steps (~0.0457 mm/step, from
+# calib12's "44.58 mm (975)"). A LOWER value puts the manifold closer to the
+# carrier, so raising a default is the safe direction.
+#
+# LHC's stock deep-well value is 929. This project defaults to 1020 for the
+# deep-well plates actually in use here; the 929 fixtures are still asserted in
+# the golden tests via an explicit dispense_height_steps override.
+VENDOR_DEEP_WELL_DISPENSE_HEIGHT_STEPS = 929
+DEEP_WELL_DISPENSE_HEIGHT_STEPS = 1020
+
 _DISPENSE_HEIGHTS = {
     PlateType.WELL_384: 333,
     PlateType.WELL_96: 336,
-    PlateType.DEEP_WELL_96: 929,
+    PlateType.DEEP_WELL_96: DEEP_WELL_DISPENSE_HEIGHT_STEPS,
 }
 _FLOW_CODES = {FlowRate.LOW: 0, FlowRate.MEDIUM: 1, FlowRate.HIGH: 2}
 _ROW_SKIP_MASKS = {
@@ -132,7 +142,7 @@ def encode_peristaltic_dispense(step: PeristalticDispense) -> bytes:
         CASSETTE_CODES[step.cassette_type],
         step.x_offset_steps,
         step.y_offset_steps,
-        _DISPENSE_HEIGHTS[step.plate_type],
+        dispense_height_steps(step),
         step.pre_dispense_volume_ul,
         step.pre_dispense_cycles,
         position_map,
@@ -140,6 +150,14 @@ def encode_peristaltic_dispense(step: PeristalticDispense) -> bytes:
         1,  # Primary peristaltic pump.
         b"\x00" * 4,
     )
+
+
+def dispense_height_steps(step: PeristalticDispense) -> int:
+    """Height above the carrier for one dispense, in instrument steps."""
+
+    if step.dispense_height_steps is not None:
+        return step.dispense_height_steps
+    return _DISPENSE_HEIGHTS[step.plate_type]
 
 
 def _encode_column_map(

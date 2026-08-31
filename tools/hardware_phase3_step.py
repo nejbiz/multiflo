@@ -47,6 +47,7 @@ def _build_step(args: argparse.Namespace):
             row_sections=args.row_sections,
             x_offset_steps=args.x_offset_steps,
             y_offset_steps=args.y_offset_steps,
+            dispense_height_steps=args.dispense_height_steps,
         )
     if args.operation == "prime":
         return PeristalticPrime(
@@ -75,7 +76,10 @@ def _build_step(args: argparse.Namespace):
     )
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The tool's CLI, exposed so tests use the real flags rather than a
+    hand-built Namespace that drifts as options are added."""
+
     parser = argparse.ArgumentParser(description=__doc__)
     add_device_args(parser, marker=True)
     parser.add_argument(
@@ -103,6 +107,11 @@ def main() -> int:
         choices=("all", "odd", "even"),
         default="all",
     )
+    parser.add_argument(
+        "--dispense-height-steps",
+        type=int,
+        help="override the plate height above the carrier; lower is closer",
+    )
     parser.add_argument("--x-offset-steps", type=int, default=0)
     parser.add_argument("--y-offset-steps", type=int, default=0)
     parser.add_argument("--pre-dispense-volume-ul", type=int, default=10)
@@ -115,6 +124,11 @@ def main() -> int:
     parser.set_defaults(move_carrier_home=True)
     parser.add_argument("--request-id")
     parser.add_argument("--authorization", required=True)
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
 
     expected_authorization = f"PHASE3_{args.operation.upper()}_SETUP_CONFIRMED"
