@@ -26,11 +26,6 @@ calib26 | dispense 10ul, high flow, 384 plate, 1ul cassette required, not all ro
 calib27 | dispense 10ul, high flow, 384 plate, 1ul cassette required, not all rows, 19 steps (0.87) left of center
 calib28 | dispense 10ul, high flow, 384 plate, 1ul cassette required, not all rows, 19 steps (0.87) left of center, 6 steps (0.44mm) front of center
 calib29 | dispense 10ul, high flow, 384 plate, 1ul cassette required, not all rows, 19 steps (0.87) left of center, 6 steps (0.44mm) back of center
-calib30 |
-
-Integration note: calib26-calib29 prove the signed horizontal position fields.
-Positive X moves right and negative X moves left; positive Y moves forward and
-negative Y moves back. The driver exposes these as `x_offset_steps` (-60..60)
-and `y_offset_steps` (-40..40) for every peristaltic dispense, independent of
-cassette type. Both default to zero. The limits come from the operator manual.
-These offset fixtures were integrated offline and were not run on hardware.
+calib30 | dispense 10ul, high flow, 384 plate, 1ul cassette required, not all rows (DIFFERENT ONES), 19 steps (0.87) left of center, 6 steps (0.44mm) back of center
+calib31 | dispense as calib30 but every other column starting with A (1)
+calib32 | dispense as calib30 but every other column starting with B (2)

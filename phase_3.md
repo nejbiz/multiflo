@@ -4,9 +4,9 @@ Date: 2026-08-26 (Europe/Zurich)
 
 ## Outcome
 
-Phase 3 expands the pure-Python driver around the capabilities of the connected
-base MultiFlo: one calibrated primary peristaltic pump, no secondary pump, no
-syringe manifold, and no washer manifold. The supported protocol steps are now:
+Phase 3 expands the pure-Python driver around the capability of the connected
+base MultiFlo: one calibrated primary peristaltic pump. The supported protocol
+steps are now:
 
 - primary peristaltic dispense;
 - primary peristaltic prime and purge;
@@ -14,9 +14,9 @@ syringe manifold, and no washer manifold. The supported protocol steps are now:
 - timed soak.
 
 Dispense support covers 96-well, 96-deep-well, and 384-well plates; low,
-medium, and high flow; cassette requirements; pre-dispense settings; proven
-column maps; the proven 384-well odd-row section; and signed X/Y fine-position
-offsets. All operations use the recovered batch lifecycle and are available
+medium, and high flow; cassette requirements; pre-dispense settings; column maps
+for every supported geometry; both 384-well row sections; and signed X/Y
+fine-position offsets. All operations use the recovered batch lifecycle and are available
 through the existing typed FastAPI protocol boundary.
 
 This phase also corrects the meaning of a successful step-command response. A
@@ -39,7 +39,7 @@ process, CLR host, or `.LHC` parser is used by the runtime driver or API.
 
 | Model | Command | Implemented surface |
 | --- | ---: | --- |
-| `PeristalticDispense` | `0x008F` | Primary pump; three plate types; low/medium/high flow; cassette requirements; paired pre-dispense; proven position maps; X/Y offsets |
+| `PeristalticDispense` | `0x008F` | Primary pump; three plate types; low/medium/high flow; cassette requirements; paired pre-dispense; partial column maps; 384-well row sections; X/Y offsets |
 | `PeristalticPrime` | `0x0090` | Primary pump, volume mode, plate selector, low/medium/high flow, cassette requirement |
 | `PeristalticPurge` | `0x0091` | Primary pump, volume mode, plate selector, low/medium/high flow, cassette requirement |
 | `Shake` | `0x00A3` | Medium speed (5 Hz), X axis, 1-60 seconds, optional carrier-home move |
@@ -95,16 +95,9 @@ The recovered dispense heights are 333 steps for 384-well, 336 for standard
 96-well, and 929 for the supported 96-deep-well geometry. These are selected by
 plate type. A public custom Z/height override is not exposed.
 
-All-column maps are supported for every plate type. Fixture-proven partial
-column selection is supported for 96-well and 96-deep-well plates. Partial
-384-well column maps remain blocked because their layout has not been proven by
-a controlled fixture.
-
-For 384-well plates the cassette processes odd rows and then even rows. The
-fixture map `1011` encodes as inverted skip mask `0x02`, proving the public
-`row_sections: "odd"` setting. It fills rows A, C, E, G, I, K, M, and O.
-All-row dispensing remains the default. Even-only selection is not exposed
-without a direct fixture.
+All-column maps are supported for every plate type, and partial column
+selection is supported for all three geometries. See the calib30-calib32
+section below for the completed 384-well row and column encoding.
 
 ### Fine positioning
 
@@ -127,7 +120,7 @@ is intentionally unsupported.
 
 Shake and soak share a 12-byte body. The fixtures prove medium speed code `3`,
 X-axis code `0`, separate shake and soak duration fields, and the carrier-home
-flag. Other speeds, axes, and indefinite soak are not inferred.
+flag. Only the fixture-proven medium speed and X axis are encoded.
 
 Representative golden bodies are:
 
@@ -239,12 +232,9 @@ cassette.
   coverage, but was not run on hardware.
 - X/Y offsets have exact offline fixture coverage and manual bounds, but were
   intentionally not run on hardware.
-- Secondary peristaltic, syringe, manifold, washer, and 1536-well operations are
-  not implemented because the connected instrument does not have those modules.
 - Protocol loops are represented by explicit repeated steps; no loop construct
   is exposed.
-- Fixed/indefinite delay steps, indefinite soak, custom dispense height/Z,
-  even-only 384 rows, and partial 384 columns are not exposed.
+- Custom dispense height/Z is not exposed; heights are selected by plate type.
 - Pause is decoded as a device status but no pause/resume command or API is
   claimed.
 - Abort remains cooperative between steps. There is no verified command to
@@ -254,5 +244,72 @@ cassette.
 
 Phase 3 is complete for the implemented primary-peristaltic configuration and
 its verified advanced dispense surface. It does not claim hardware evidence for
-purge or capabilities absent from this machine. Those boundaries remain explicit
-inputs to Phase 4 rather than inferred functionality.
+purge. Those boundaries remain explicit inputs to Phase 4 rather than inferred
+functionality.
+
+## Completed 384-well row and column selection (calib30-calib32)
+
+The three final controlled fixtures close the last open item in the Phase 3
+scope. Each changes exactly one aspect of the calib29 dispense, so the vendor
+encoder output isolates the field under test.
+
+| Fixture | Change from calib29 | Definition map fields | Encoded bytes 12-18 |
+| --- | --- | --- | --- |
+| calib30 | Other row section | columns `1...1`, rows `0111` | `FF FF FF FF FF FF 01` |
+| calib31 | Odd columns only | columns `1010...` + `1...1`, rows `1111` | `55 55 55 FF FF FF 00` |
+| calib32 | Even columns only | columns `0101...` + `1...1`, rows `1111` | `AA AA AA FF FF FF 00` |
+
+### 384-well row sections
+
+Byte 18 is an inverted skip mask over the two cassette passes across a
+384-well plate. Bit 0 selects the first section and bit 1 selects the second.
+calib25's `1011` map clears bit 1 and encodes `0x02`; the guarded hardware run
+confirmed liquid only in rows A, C, E, G, I, K, M, and O, so the first section
+is the odd rows. calib30's `0111` map clears bit 0 and encodes `0x01`, which is
+therefore the even rows B, D, F, H, J, L, N, and P.
+
+`row_sections` is now `all` (mask `0x00`, the default), `odd` (`0x02`), or
+`even` (`0x01`), and it is still rejected for 96-well geometries. The two
+remaining high bits of the field are set in every fixture and are never cleared
+by the encoder.
+
+### Partial 384-well column maps
+
+Bytes 12-17 are the same 48-bit positional map used by the 96-well geometries:
+bit `column - 1`, least significant bit first within each byte. calib31 selects
+columns 1, 3, ... 23 and encodes `55 55 55`; calib32 selects columns 2, 4, ... 24
+and encodes `AA AA AA`. Both leave the 24 unused trailing positions set, which
+matches the deep-well behavior already proven by calib3 and differs from the
+standard 96-well map, where LHC clears them.
+
+The encoder now derives both the column count and the trailing-position
+convention from the plate type:
+
+| Plate | Columns | Unused trailing positions |
+| --- | ---: | --- |
+| 384-well | 24 | set |
+| 96-deep-well | 12 | set |
+| 96-well | 12 | cleared |
+
+`columns` therefore accepts any unique subset of 1-24 for a 384-well plate and
+1-12 for the two 96-well geometries. The fixtures directly cover all-column,
+odd-column, and even-column 384-well maps; arbitrary subsets follow from the
+same positional rule, which calib3 already proved for a single deep-well column.
+
+### Verification
+
+`encode_peristaltic_dispense` reproduces the vendor encoder output byte for byte
+for calib30, calib31, and calib32, and the three bodies are fixed as golden
+tests. The suite is now 82 passing tests on Python 3.13.15:
+
+```powershell
+uv run python -m unittest discover -s tests -v
+```
+
+The guarded one-step hardware tool accepts `--row-sections even` alongside `odd`
+and `all`. These fixtures were integrated offline; the even-row section and the
+partial 384-well column maps were not run on hardware, so the odd-row 384-well
+dispense remains the only hardware-observed 384-well pattern.
+
+With calib30-calib32 integrated, every fixture under `protocols/` that falls in
+the Phase 3 operation scope is encoded, validated, and covered by a golden test.

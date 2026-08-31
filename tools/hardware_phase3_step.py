@@ -98,7 +98,11 @@ def main() -> int:
     parser.add_argument("--flow-rate", choices=("low", "medium", "high"), default="medium")
     parser.add_argument("--duration-seconds", type=int)
     parser.add_argument("--columns", default="all")
-    parser.add_argument("--row-sections", choices=("all", "odd"), default="all")
+    parser.add_argument(
+        "--row-sections",
+        choices=("all", "odd", "even"),
+        default="all",
+    )
     parser.add_argument("--x-offset-steps", type=int, default=0)
     parser.add_argument("--y-offset-steps", type=int, default=0)
     parser.add_argument("--pre-dispense-volume-ul", type=int, default=10)

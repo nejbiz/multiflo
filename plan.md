@@ -140,15 +140,7 @@ This is the first command to test on hardware. Never use a motion command as a c
 | `0x008F` | Peristaltic dispense |
 | `0x0090` | Peristaltic prime |
 | `0x0091` | Peristaltic purge |
-| `0x00A1` | Syringe dispense |
-| `0x00A2` | Syringe prime |
 | `0x00A3` | Shake/soak |
-| `0x00A4` | Manifold wash |
-| `0x00A5` | Manifold aspirate |
-| `0x00A6` | Manifold dispense |
-| `0x00A7` | Manifold prime |
-| `0x00A8` | Manifold auto-clean |
-| `0x00B1` | 1536-well wash |
 
 These are fixed IDs selected from the operation type. They are not calculated from volumes or visible LHC definition prefixes.
 
@@ -175,7 +167,7 @@ Known fields:
 | 10 | Pre-dispense cycles |
 | 11-16 | Packed 48-position map |
 | 17 | Inverted row-skip mask |
-| 18 | Pump: primary `1`, secondary `2` |
+| 18 | Pump: primary `1` |
 | 19-22 | Unknown/reserved; zero in this fixture |
 
 Plate type `5` is prepended. The complete request is:
@@ -286,14 +278,9 @@ For each operation, repeat the same small loop:
 5. Verify the lowest-risk valid example on hardware.
 6. Record remaining unknowns explicitly.
 
-Operations:
+Operations - this is the final scope, do not deviate:
 
-- peristaltic prime and purge;
-- secondary peristaltic pump selection;
-- syringe dispense and prime;
-- manifold wash, aspirate, dispense, prime, and auto-clean;
-- shake/soak;
-- 1536-well wash where supported;
+- peristaltic prime, dispense, shake, pause and purge;
 - plate types and position maps; and
 - advanced options actually exposed for those operations.
 

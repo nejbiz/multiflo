@@ -178,6 +178,48 @@ class CodecTests(unittest.TestCase):
             ),
         )
 
+    def test_calib30_384_well_even_rows_golden_body(self) -> None:
+        step = PeristalticDispense(
+            volume_ul=10,
+            plate_type="384_well",
+            flow_rate="high",
+            cassette_type="1ul",
+            row_sections="even",
+            x_offset_steps=-19,
+            y_offset_steps=-6,
+        )
+        self.assertEqual(
+            encode_peristaltic_dispense(step),
+            bytes.fromhex(
+                "01 0A 00 02 01 ED FA 4D 01 0A 00 02 "
+                "FF FF FF FF FF FF 01 01 00 00 00 00"
+            ),
+        )
+
+    def test_calib31_and_calib32_partial_384_column_maps(self) -> None:
+        fixtures = {
+            "calib31": (tuple(range(1, 25, 2)), "55 55 55 FF FF FF"),
+            "calib32": (tuple(range(2, 25, 2)), "AA AA AA FF FF FF"),
+        }
+        for name, (columns, encoded_map) in fixtures.items():
+            with self.subTest(name=name):
+                step = PeristalticDispense(
+                    volume_ul=10,
+                    plate_type="384_well",
+                    flow_rate="high",
+                    cassette_type="1ul",
+                    columns=columns,
+                    x_offset_steps=-19,
+                    y_offset_steps=-6,
+                )
+                self.assertEqual(
+                    encode_peristaltic_dispense(step),
+                    bytes.fromhex(
+                        "01 0A 00 02 01 ED FA 4D 01 0A 00 02 "
+                        f"{encoded_map} 00 01 00 00 00 00"
+                    ),
+                )
+
     def test_calib26_through_29_xy_offset_golden_bodies(self) -> None:
         fixtures = {
             "calib26": (19, 0, "13 00"),

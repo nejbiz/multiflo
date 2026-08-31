@@ -27,6 +27,12 @@ class PlateType(str, Enum):
     DEEP_WELL_96 = "96_deep_well"
 
 
+PLATE_COLUMN_COUNTS = {
+    PlateType.WELL_384: 24,
+    PlateType.WELL_96: 12,
+    PlateType.DEEP_WELL_96: 12,
+}
+
 CASSETTE_CODES = {
     CassetteType.ANY: 0,
     CassetteType.ONE_UL: 1,
@@ -74,7 +80,7 @@ class PeristalticDispense(BaseModel):
     pre_dispense_volume_ul: int = Field(default=10, ge=0, le=3000)
     pre_dispense_cycles: int = Field(default=2, ge=0, le=255)
     columns: Literal["all"] | tuple[int, ...] = "all"
-    row_sections: Literal["all", "odd"] = "all"
+    row_sections: Literal["all", "odd", "even"] = "all"
     x_offset_steps: int = Field(default=0, ge=-60, le=60)
     y_offset_steps: int = Field(default=0, ge=-40, le=40)
 
@@ -91,14 +97,13 @@ class PeristalticDispense(BaseModel):
                 self.cassette_type,
             )
         if self.columns != "all":
-            if self.plate_type is PlateType.WELL_384:
-                raise ValueError(
-                    "partial 384-well column maps are not supported without a fixture"
-                )
             if not self.columns:
                 raise ValueError("at least one dispense column is required")
-            if any(column < 1 or column > 12 for column in self.columns):
-                raise ValueError("96-well columns must be between 1 and 12")
+            highest = PLATE_COLUMN_COUNTS[self.plate_type]
+            if any(column < 1 or column > highest for column in self.columns):
+                raise ValueError(
+                    f"{self.plate_type.value} columns must be between 1 and {highest}"
+                )
             if len(set(self.columns)) != len(self.columns):
                 raise ValueError("dispense columns must be unique")
         if (

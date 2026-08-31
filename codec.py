@@ -10,6 +10,7 @@ from typing import Literal
 from .errors import ProtocolError, ValidationError
 from .models import (
     CASSETTE_CODES,
+    PLATE_COLUMN_COUNTS,
     FlowRate,
     PeristalticDispense,
     PeristalticPrime,
@@ -41,9 +42,18 @@ _DISPENSE_HEIGHTS = {
 _FLOW_CODES = {FlowRate.LOW: 0, FlowRate.MEDIUM: 1, FlowRate.HIGH: 2}
 _ROW_SKIP_MASKS = {
     "all": 0x00,
-    # calib25's 1011 LHC map skips the second section. The operator manual
-    # identifies the first 384-well section as odd rows and the second as even.
+    # The 384-well row field is an inverted skip mask over the two cassette
+    # sections. calib25's 1011 map clears bit 1 and dispensed only odd rows on
+    # hardware; calib30's 0111 map clears bit 0 and selects the even rows.
     "odd": 0x02,
+    "even": 0x01,
+}
+# LHC keeps the unused trailing positions of a partial column map enabled for
+# the deep-well and 384-well geometries and clears them for standard 96-well.
+_UNUSED_MAP_POSITIONS_ENABLED = {
+    PlateType.WELL_384: True,
+    PlateType.WELL_96: False,
+    PlateType.DEEP_WELL_96: True,
 }
 
 
@@ -138,16 +148,12 @@ def _encode_column_map(
 ) -> bytes:
     if columns == "all":
         return b"\xff" * 6
-    if plate_type is PlateType.WELL_384:
-        raise ValueError("partial 384-well column maps are not supported")
     bits = [0] * 48
     for column in columns:
         bits[column - 1] = 1
-    # LHC retains enabled, unused positions when a deep-well partial map is
-    # selected. They are ignored for a 12-column plate but kept for an exact
-    # fixture-compatible encoding.
-    if plate_type is PlateType.DEEP_WELL_96:
-        bits[12:] = [1] * 36
+    column_count = PLATE_COLUMN_COUNTS[plate_type]
+    if _UNUSED_MAP_POSITIONS_ENABLED[plate_type]:
+        bits[column_count:] = [1] * (48 - column_count)
     packed = bytearray(6)
     for index, enabled in enumerate(bits):
         packed[index // 8] |= enabled << (index % 8)

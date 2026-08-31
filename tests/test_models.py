@@ -33,11 +33,18 @@ class ModelTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             PeristalticDispense(volume_ul=100, unsupported=True)
 
-    def test_columns_are_unique_and_in_96_well_range(self) -> None:
+    def test_columns_are_unique_and_bounded_by_plate_geometry(self) -> None:
         with self.assertRaisesRegex(ValidationError, "unique"):
             PeristalticDispense(volume_ul=100, columns=(1, 1))
         with self.assertRaisesRegex(ValidationError, "between 1 and 12"):
             PeristalticDispense(volume_ul=100, columns=(13,))
+        with self.assertRaisesRegex(ValidationError, "between 1 and 24"):
+            PeristalticDispense(
+                volume_ul=10,
+                plate_type="384_well",
+                cassette_type="1ul",
+                columns=(25,),
+            )
 
     def test_calib21_unsafe_1ul_cassette_volume_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValidationError, "between 1 and 50"):
@@ -48,14 +55,14 @@ class ModelTests(unittest.TestCase):
                 cassette_type="1ul",
             )
 
-    def test_partial_384_well_map_waits_for_a_fixture(self) -> None:
-        with self.assertRaisesRegex(ValidationError, "partial 384-well"):
-            PeristalticDispense(
-                volume_ul=1,
-                plate_type="384_well",
-                cassette_type="1ul",
-                columns=(1,),
-            )
+    def test_calib31_partial_384_well_column_map_is_accepted(self) -> None:
+        step = PeristalticDispense(
+            volume_ul=1,
+            plate_type="384_well",
+            cassette_type="1ul",
+            columns=tuple(range(1, 25, 2)),
+        )
+        self.assertEqual(step.columns, tuple(range(1, 25, 2)))
 
     def test_calib25_odd_row_section_is_limited_to_384_well_plates(self) -> None:
         step = PeristalticDispense(
@@ -70,13 +77,17 @@ class ModelTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "only for 384-well"):
             PeristalticDispense(volume_ul=10, row_sections="odd")
 
-    def test_even_row_section_waits_for_a_fixture(self) -> None:
-        with self.assertRaises(ValidationError):
-            PeristalticDispense(
-                volume_ul=10,
-                plate_type="384_well",
-                row_sections="even",
-            )
+    def test_calib30_even_row_section_is_limited_to_384_well_plates(self) -> None:
+        step = PeristalticDispense(
+            volume_ul=10,
+            plate_type="384_well",
+            cassette_type="1ul",
+            row_sections="even",
+        )
+        self.assertEqual(step.row_sections, "even")
+
+        with self.assertRaisesRegex(ValidationError, "only for 384-well"):
+            PeristalticDispense(volume_ul=10, row_sections="even")
 
     def test_xy_offsets_are_cassette_independent_and_manual_bounded(self) -> None:
         for cassette_type in ("any", "1ul", "5ul", "10ul"):
