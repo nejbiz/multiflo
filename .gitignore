@@ -9,5 +9,6 @@ dist/
 .multiflo-active-run.json
 .multiflo-active-run.json.tmp
 
-# Local demo workspace (not tracked)
+# Local learning workspace (not tracked)
+simulation-learning/
 implementation_demo/

@@ -1,4 +1,4 @@
-"""Phase 5 checks for the loopback single-worker service entry point."""
+"""Checks for the loopback single-worker service entry point."""
 
 from __future__ import annotations
 

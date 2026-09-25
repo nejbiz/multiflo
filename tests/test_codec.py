@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from multiflo.codec import (
+    DEEP_WELL_384_DISPENSE_HEIGHT_STEPS,
     DEEP_WELL_DISPENSE_HEIGHT_STEPS,
     VENDOR_DEEP_WELL_DISPENSE_HEIGHT_STEPS,
     Endpoint,
@@ -51,6 +52,7 @@ DISPENSE_PACKET = load_fixture("calib1_dispense_request.hex")
 class CodecTests(unittest.TestCase):
     def test_start_batch_plate_selector(self) -> None:
         self.assertEqual(encode_batch_start(PlateType.WELL_384), b"\x01")
+        self.assertEqual(encode_batch_start(PlateType.DEEP_WELL_384), b"\x01")
         self.assertEqual(encode_batch_start(PlateType.WELL_96), b"\x04")
         self.assertEqual(encode_batch_start(PlateType.DEEP_WELL_96), b"\x05")
 
@@ -59,6 +61,7 @@ class CodecTests(unittest.TestCase):
         # so the vendor fixture is reproduced with an explicit override.
         step = PeristalticDispense(
             volume_ul=100,
+            plate_type="96_deep_well",
             dispense_height_steps=VENDOR_DEEP_WELL_DISPENSE_HEIGHT_STEPS,
         )
         body = bytes.fromhex(
@@ -71,6 +74,7 @@ class CodecTests(unittest.TestCase):
     def test_calib3_partial_deep_well_golden_body(self) -> None:
         step = PeristalticDispense(
             volume_ul=200,
+            plate_type="96_deep_well",
             columns=(1,),
             dispense_height_steps=VENDOR_DEEP_WELL_DISPENSE_HEIGHT_STEPS,
         )
@@ -266,7 +270,9 @@ class CodecTests(unittest.TestCase):
     def test_deep_well_default_height_is_the_project_value(self) -> None:
         """Deep-well dispenses default to 1020 steps, not LHC's 929."""
 
-        body = encode_peristaltic_dispense(PeristalticDispense(volume_ul=100))
+        body = encode_peristaltic_dispense(
+            PeristalticDispense(volume_ul=100, plate_type="96_deep_well")
+        )
 
         self.assertEqual(DEEP_WELL_DISPENSE_HEIGHT_STEPS, 1020)
         self.assertEqual(
@@ -280,6 +286,39 @@ class CodecTests(unittest.TestCase):
                 "FF FF FF FF FF FF 00 01 00 00 00 00"
             ),
         )
+
+    def test_384_deep_well_clones_384_body_except_for_height(self) -> None:
+        standard = encode_peristaltic_dispense(
+            PeristalticDispense(
+                volume_ul=10,
+                plate_type="384_well",
+                cassette_type="1ul",
+                columns=(1, 24),
+                row_sections="odd",
+                x_offset_steps=-19,
+                y_offset_steps=6,
+            )
+        )
+        deep_well = encode_peristaltic_dispense(
+            PeristalticDispense(
+                volume_ul=10,
+                plate_type="384_deep_well",
+                cassette_type="1ul",
+                columns=(1, 24),
+                row_sections="odd",
+                x_offset_steps=-19,
+                y_offset_steps=6,
+            )
+        )
+
+        self.assertEqual(int.from_bytes(standard[7:9], "little"), 333)
+        self.assertEqual(DEEP_WELL_384_DISPENSE_HEIGHT_STEPS, 553)
+        self.assertEqual(
+            int.from_bytes(deep_well[7:9], "little"),
+            DEEP_WELL_384_DISPENSE_HEIGHT_STEPS,
+        )
+        self.assertEqual(deep_well[:7], standard[:7])
+        self.assertEqual(deep_well[9:], standard[9:])
 
     def test_other_plate_heights_are_unchanged(self) -> None:
         for plate, cassette, expected in (

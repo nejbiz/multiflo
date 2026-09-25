@@ -57,6 +57,23 @@ class HardwarePhase3ToolTests(unittest.TestCase):
             DEEP_WELL_DISPENSE_HEIGHT_STEPS,
         )
 
+    def test_384_deep_well_is_available_to_the_guarded_tool(self) -> None:
+        step = _build_step(
+            parse(
+                "--operation", "dispense",
+                "--volume-ul", "10",
+                "--cassette", "1ul",
+                "--plate-type", "384_deep_well",
+                "--row-sections", "even",
+            )
+        )
+
+        self.assertEqual(
+            step.model_dump(mode="json")["plate_type"],
+            "384_deep_well",
+        )
+        self.assertEqual(step.row_sections, "even")
+
     def test_the_height_can_be_overridden_per_run(self) -> None:
         step = _build_step(
             parse(

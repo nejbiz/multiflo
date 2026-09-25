@@ -1,4 +1,4 @@
-"""Guarded read-only Phase 1 identity, firmware, and module inventory."""
+"""Guarded read-only identity, firmware, and module inventory."""
 
 from __future__ import annotations
 

@@ -1,368 +1,155 @@
-# Base MultiFlo Driver Plan
-
-## Goal
-
-Build a small, pure Python driver for the **base BioTek MultiFlo**, communicate over its USB-B/FTDI connection, and expose the completed driver through FastAPI.
-
-The milestone is complete when an API client can:
-
-- inspect the connected instrument;
-- define and validate a protocol;
-- run every supported base MultiFlo step;
-- poll run state and step progress;
-- abort a run safely;
-- pause or resume only if those behaviors are verified on the instrument; and
-- receive clear validation, device, transport, and ambiguous-execution errors.
-
-Further clients, user interfaces, deployment integrations, and workflow integrations are outside this plan.
-
-## Scope
-
-In scope:
-
-- Pure Python implementation of the MultiFlo protocol.
-- USB-B transport through FTDI D2XX.
-- Packet framing, checksum, command IDs, payload encoding, and response decoding.
-- Instrument identity, installed-module, busy/idle, status, and error queries needed for safe execution.
-- Typed models and validation for all base MultiFlo operations.
-- Sequential protocol execution, progress, abort, and verified pause/resume.
-- A minimal FastAPI/OpenAPI surface.
-- Unit, golden-packet, fake-transport, API, and guarded hardware tests.
-
-Out of scope:
-
-- RS-232 or virtual COM ports.
-- MultiFlo FX behavior.
-- `pythonnet`, CLR hosting, COM automation, or wrapping BioTek managed assemblies.
-- Loading or launching LHC at runtime.
-- Firmware/basecode modification.
-- Arbitrary raw-command API endpoints.
-- A production `.LHC` import feature.
-- Database-backed run history, event sourcing, SSE/WebSockets, multi-process scaling, authentication, TLS, or remote deployment policy.
-- UI and later integrations.
-
-## Pure Python boundary
-
-All MultiFlo-specific behavior must be Python source owned by this project:
-
-- framing and checksums;
-- command and payload encoding;
-- response and indication decoding;
-- parameter validation;
-- protocol execution and state;
-- error handling; and
-- FastAPI exposure.
-
-The following BioTek files are reverse-engineering evidence only and must never be runtime dependencies:
-
-- `Liquid Handling Control.exe`
-- `BTILHCRunner.dll`
-- `BTI406Interface.dll`
-- `BTIMultiFloInterface.dll`
-- `FTD2XX_NET.dll`
-
-The operating system still needs an FTDI USB driver. Python may call the official native D2XX library through a maintained Python binding or a small reviewed `ctypes` adapter. That adapter may only enumerate, open, configure, purge, read, write, and close FTDI devices. It must contain no MultiFlo semantics.
-
-Removing the BioTek application and managed assemblies must not break the installed driver or its tests once the permitted FTDI transport is available.
-
-## Local evidence
-
-- Sample protocol: `protocols/calib1.LHC`
-- Operator manual: `manuals/BioTek+MultiFlo_Operator's+Manual.pdf`
-- Main application:
-  `C:\Users\nej\OneDrive\Documents\LHC-everything\LHC Installation\program files\BioTek\Liquid Handling Control 2.22\Liquid Handling Control.exe`
-- LHC runner assembly:
-  `C:\Users\nej\OneDrive\Documents\LHC-everything\LHC Installation\program files\BioTek\Liquid Handling Control 2.22\BTILHCRunner.dll`
-- Base MultiFlo implementation:
-  `C:\Users\nej\OneDrive\Documents\LHC-everything\LHC Installation\program files\BioTek\Liquid Handling Control 2.22\MultiFlo\BTI406Interface.dll`
-- Small MultiFlo adapter:
-  `C:\Users\nej\OneDrive\Documents\LHC-everything\LHC Installation\program files\BioTek\Liquid Handling Control 2.22\MultiFlo\BTIMultiFloInterface.dll`
-- Managed FTDI reference and API XML:
-  `C:\Users\nej\OneDrive\Documents\LHC-everything\LHC Installation\program files\BioTek\Liquid Handling Control 2.22\MultiFlo\FTD2XX_NET.dll`
-  `C:\Users\nej\OneDrive\Documents\LHC-everything\LHC Installation\program files\BioTek\Liquid Handling Control 2.22\MultiFlo\FTD2XX_NET.xml`
-- Native D2XX library shipped with LHC:
-  `C:\Users\nej\OneDrive\Documents\LHC-everything\LHC Installation\program files\BioTek\Liquid Handling Control 2.22\ftd2xx.dll`
-- Operator help:
-  `C:\Users\nej\OneDrive\Documents\LHC-everything\LHC Installation\program files\BioTek\Liquid Handling Control 2.22\MultiFlo\MultiFlo.chm`
-
-Use the DLLs only for offline analysis. Save conclusions as documentation and fixed test fixtures so normal tests never need vendor code.
-
-## Known protocol facts
-
-### Transport
-
-LHC uses FTDI D2XX directly, not a virtual COM port. It finds the device by FTDI description and serial number and configures:
-
-- 38400 baud;
-- 8 data bits;
-- no parity;
-- 2 stop bits;
-- no flow control;
-- DTR and RTS; and
-- explicit read/write timeouts.
-
-Before implementation is considered stable, verify the target instrument's VID, PID, description, serial number, latency behavior, DTR/RTS values, purge behavior, and timeouts.
-
-### Frame
-
-Requests and responses use an 11-byte little-endian header:
-
-| Offset | Size | Field |
-| ---: | ---: | --- |
-| 0 | 1 | Class: request `1`, response `2`, indication `3` |
-| 1 | 1 | Destination: instrument `2` |
-| 2 | 2 | Command ID |
-| 4 | 1 | Source: PC `1` |
-| 5 | 2 | Message ID |
-| 7 | 2 | Body length |
-| 9 | 2 | Checksum |
-
-Checksum:
-
-```text
-checksum = (-sum(header bytes 0..8 and all body bytes)) & 0xffff
-```
-
-The checksum is written little-endian. It detects corruption; it is not encryption or authentication.
-
-The bodyless communication-test command is `0x0073`. With message ID zero:
-
-```text
-01 02 73 00 01 00 00 00 00 89 FF
-```
-
-This is the first command to test on hardware. Never use a motion command as a connection test.
-
-### Known operation IDs
-
-| Command | Operation |
-| ---: | --- |
-| `0x008F` | Peristaltic dispense |
-| `0x0090` | Peristaltic prime |
-| `0x0091` | Peristaltic purge |
-| `0x00A3` | Shake/soak |
-
-These are fixed IDs selected from the operation type. They are not calculated from volumes or visible LHC definition prefixes.
-
-### Existing golden packet
-
-`calib1.LHC` describes a 100 uL medium-speed primary peristaltic dispense to a 96-deep-well plate, with every position selected and a 10 uL/two-cycle pre-dispense.
-
-The 23-byte step payload is:
-
-```text
-64 00 01 00 00 00 A1 03 0A 00 02 FF FF FF FF FF FF 00 01 00 00 00 00
-```
-
-Known fields:
-
-| Bytes | Meaning |
-| ---: | --- |
-| 0-1 | Volume, unsigned 16-bit little-endian |
-| 2 | Flow rate; Low `0`, Medium `1` |
-| 3 | Required cassette; `0` means any |
-| 4-5 | Signed horizontal offsets |
-| 6-7 | Dispense height |
-| 8-9 | Pre-dispense volume |
-| 10 | Pre-dispense cycles |
-| 11-16 | Packed 48-position map |
-| 17 | Inverted row-skip mask |
-| 18 | Pump: primary `1` |
-| 19-22 | Unknown/reserved; zero in this fixture |
-
-Plate type `5` is prepended. The complete request is:
-
-```text
-01 02 8F 00 01 00 00 18 00 40 F8
-05 64 00 01 00 00 00 A1 03 0A 00 02 FF FF FF FF FF FF 00 01 00 00 00 00
-```
-
-Keep this only as a golden test unless a hardware test explicitly authorizes motion.
-
-## Simple design
-
-Use a small package. Start with these modules and split only when a file becomes genuinely difficult to understand:
-
-```text
-src/multiflo/
-  models.py       Protocol and operation models plus validation
-  codec.py        Frame, checksum, command bodies, response parsing
-  transport.py    FTDI D2XX and serial byte transports
-  driver.py       Device ownership, commands, run state, abort
-  runner.py       Sequential execution, run state, crash marker
-  api.py          FastAPI schemas and routes
-  service.py      Single-worker loopback entry point
-  errors.py       Small stable error set
-  logs.py         One JSON-line event format for every layer
-  tools/          Guarded hardware tools and offline helpers
-tests/            Outside the package, so it is not shipped in a wheel
-```
-
-Development-only `.LHC` decryption/differential scripts belong under `src/multiflo/tools/`, not in the production driver or API. Test doubles live in `tests/fakes.py`, never in the shipped package.
-
-Keep the boundaries simple:
-
-- `transport.py` moves bytes and knows nothing about MultiFlo commands.
-- `codec.py` converts typed commands and frames to/from bytes.
-- `driver.py` is the single authoritative controller and protocol runner.
-- `api.py` validates HTTP input and calls `driver.py`; it never touches D2XX or raw packets.
-- Use the same Pydantic protocol models internally and at the API boundary unless a real mismatch appears. Do not create duplicate model layers pre-emptively.
-
-## Operating rules
-
-- One process owns the USB handle.
-- One worker thread performs blocking D2XX reads and writes.
-- One request is in flight at a time.
-- One protocol run may be active.
-- FastAPI handlers never block the event loop on USB I/O.
-- An HTTP timeout or client disconnect never cancels or retries physical motion.
-- A timeout or disconnect after sending motion becomes `unknown_execution_state`.
-- Never retry a command with an uncertain outcome.
-- Start with a single Uvicorn worker. Multiple workers must not compete for one instrument.
-- Use polling for run progress. Do not add streaming infrastructure unless polling proves inadequate.
-
-Use a small error set:
-
-- `ValidationError`
-- `TransportError`
-- `ProtocolError`
-- `DeviceError`
-- `BusyError`
-- `UnknownExecutionState`
-
-Add another error class only when callers need to handle it differently.
-
-## Development phases
-
-### Phase 0 - Evidence and safe setup
-
-- Record the exact instrument, serial number, installed modules, firmware/basecode, and calibration status.
-- Select the Python version, host architecture, native D2XX distribution, and minimal Python binding/adapter.
-- Record FTDI VID/PID, description, and serial number.
-- Define a safe dry test setup and allowed parameter ranges.
-- Identify known read-only/non-motion commands.
-- Store the current checksum and dispense fixtures as test data.
-
-Done when the environment is reproducible and there is a written hardware test procedure.
-
-### Phase 1 - USB, framing, and read-only communication
-
-- Implement the frame model, little-endian fields, checksum, and response parser.
-- Implement the narrow D2XX transport: enumerate, select, open, configure, purge, read, write, close.
-- Add a scripted fake transport; do not build a full instrument simulator.
-- Test success, fragmented reads, malformed length, bad checksum, timeout, and disconnect.
-- Send only `0x0073` on initial hardware tests.
-- Add the minimum identity, firmware, installed-module, busy/idle, and status queries required before motion.
-
-Done when the intended instrument is selected reliably and repeated read-only communication succeeds.
-
-### Phase 2 - First end-to-end vertical slice
-
-Implement peristaltic dispense completely before broadening the design:
-
-- typed request model and validation;
-- `0x008F` payload encoding;
-- golden test using `calib1`;
-- one safe hardware verification;
-- minimal protocol model containing one or more dispense steps;
-- sequential execution and basic run state;
-- minimal FastAPI endpoints for validation, starting a run, polling it, and aborting it.
-
-Do not generalize beyond what this slice proves. Refactor only after the complete path works from JSON request to verified hardware response.
-
-Done when a validated one-step dispense can run through FastAPI and its result can be polled without exposing raw commands.
-
-### Phase 3 - Add the remaining operations one at a time
-
-For each operation, repeat the same small loop:
-
-1. Generate controlled LHC fixtures that change one parameter at a time.
-2. Recover the body format through offline DLL analysis and differential comparison.
-3. Add the typed model and only its necessary validation.
-4. Add golden encoding/decoding tests.
-5. Verify the lowest-risk valid example on hardware.
-6. Record remaining unknowns explicitly.
-
-Operations - this is the final scope, do not deviate:
-
-- peristaltic prime, dispense, shake, pause and purge;
-- plate types and position maps; and
-- advanced options actually exposed for those operations.
-
-Do not create one universal payload abstraction. Separate encoders are clearer when operation formats differ.
-
-Done when every operation has a tested model, encoder, validator, response behavior, and hardware evidence.
-
-### Phase 4 - Finish protocol execution and failure behavior
-
-- Support ordered mixed-operation protocols.
-- Validate installed modules, plate compatibility, units, ranges, and position maps before motion.
-- Keep a small state machine: `disconnected`, `idle`, `running`, `paused` where supported, `aborting`, `completed`, `failed`, and `unknown_execution_state`.
-- Verify abort before relying on it from the API.
-- Add pause/resume only if instrument behavior is understood and tested.
-- Write ordinary structured logs with run ID, step index, request, response/status, and timestamps.
-- Keep one small crash marker containing the active run and last confirmed step. On restart, block motion until read-only state reconciliation or operator acknowledgement. Do not build an event store.
-
-Done when mixed protocols run sequentially and timeout, disconnect, abort, and restart behavior cannot silently duplicate motion.
-
-### Phase 5 - Finalize the FastAPI boundary
-
-Keep the API small:
-
-- `GET /v1/health` - process health; no hardware command.
-- `GET /v1/device` - verified identity, modules, connection, and state.
-- `POST /v1/protocols/validate`
-- `POST /v1/runs` - accepts a protocol and client-supplied request ID; returns a run ID quickly.
-- `GET /v1/runs/{run_id}` - state, current step, errors, and final result.
-- `POST /v1/runs/{run_id}/abort`
-- Pause/resume endpoints only if Phase 4 verified them.
-
-Requirements:
-
-- Strict Pydantic schemas and generated OpenAPI.
-- No raw command, packet, firmware, or unvalidated maintenance endpoints.
-- A repeated request ID must not start a duplicate run during the service lifetime.
-- Starting while another run is active returns a conflict.
-- Validation errors do not open or command the instrument.
-- HTTP disconnects do not alter execution.
-- Bind to loopback during development and run one API worker.
-
-Done when API contract tests pass with the fake transport and a guarded end-to-end test passes against the real instrument.
-
-## Test strategy
-
-Keep four test groups:
-
-1. **Unit and golden tests:** checksum, framing, known payloads, parsing, models, and validation.
-2. **Fake-transport tests:** fragmented responses, device errors, timeouts, disconnects, abort, and ambiguous state.
-3. **Hardware tests:** opt-in, guarded by expected serial number, with read-only and motion tests separated.
-4. **FastAPI tests:** schemas, validation, conflicts, request-ID deduplication, polling, abort, and one complete fake run.
-
-Every hardware bug should become a small unit or fake-transport regression when possible.
-
-## Definition of done
-
-- The driver is pure Python except for the permitted low-level FTDI/OS transport dependency.
-- No `pythonnet`, CLR, BioTek managed assembly, LHC process, COM, or GUI dependency exists.
-- The driver connects only to the intended base MultiFlo over USB-B/D2XX.
-- Identity and installed capabilities are checked before motion.
-- Every supported base MultiFlo operation is encoded, validated, and hardware-verified.
-- Mixed protocols execute sequentially with pollable step progress.
-- Abort works; pause/resume exists only if verified.
-- Timeout, disconnect, and crash cannot cause automatic replay or duplicate motion.
-- FastAPI exposes the minimal documented API and no raw hardware escape hatch.
-- Unit, fake, hardware, and API tests pass.
-- Protocol facts, unknowns, safe operating procedure, and recovery procedure are documented.
-
-## Rules for future work
-
-- Prefer the smallest working vertical slice over a framework designed for hypothetical integrations.
-- Add abstractions only after duplication or a concrete second implementation makes them useful.
-- Keep FastAPI thin and keep USB ownership in `driver.py`.
-- Keep `.LHC` parsing as development tooling unless product compatibility is separately requested.
-- Do not add a database, broker, event store, plugin system, streaming layer, or multi-worker design without a demonstrated need.
-- Stay on the base MultiFlo; ignore FX-only material unless it proves a shared primitive.
-- Separate observed facts from inferences and record evidence for each recovered field.
-- Never solve a gap by wrapping a BioTek assembly. Reimplement understood behavior in Python.
-- Never perform a hardware-changing action without explicit authorization and a safe setup.
-- Preserve unrelated user files and changes.
+# MultiFlo plan
+
+This is the single source of truth for the base MultiFlo driver as of
+2026-09-25. It records the current implementation and remaining work. Follow
+the linked code, tests, and evidence files for exact schemas and bytes.
+
+## Goal and status
+
+Provide a small, pure Python driver for one base BioTek MultiFlo and a validated
+HTTP interface. The current driver supports primary peristaltic **dispense,
+prime, purge**, plus **shake and soak**. A single worker executes ordered
+protocol steps. The HTTP API offers individual operation routes and retains
+multi-step protocol submission for existing clients. The 141 offline tests pass;
+no hardware test was run during this repository cleanup.
+
+The runtime does not load BioTek executables, managed assemblies, or `.LHC`
+files. Vendor material in [protocols](protocols) and [manuals](manuals) is
+development evidence. No FX, syringe, washer, firmware, raw-command, UI,
+database, or multi-device implementation is in scope.
+
+## Repository map
+
+| Path | Responsibility |
+| --- | --- |
+| [models.py](src/multiflo/models.py) | Strict Pydantic operation and protocol models; plate, cassette, volume, geometry, and time limits |
+| [codec.py](src/multiflo/codec.py) | 11-byte frames, checksum, response decoding, and fixture-derived operation bodies |
+| [transport.py](src/multiflo/transport.py) | Byte-only D2XX, serial, and offline null transports |
+| [driver.py](src/multiflo/driver.py) | One in-flight exchange, read-only inventory, preflight, batch lifecycle, and failure classification |
+| [runner.py](src/multiflo/runner.py) | One worker, ordered steps, request-ID replay protection, abort, status, and crash marker |
+| [api.py](src/multiflo/api.py), [service.py](src/multiflo/service.py) | Strict HTTP routes and one-worker loopback server |
+| [tools](src/multiflo/tools) | Guarded hardware tools, RevPi entry point, OpenAPI export, and offline analysis helpers |
+| [tests](tests) | Golden packets, simulated byte I/O, execution, transport, and API contracts |
+
+The package uses a `src` layout; tests and evidence are outside the wheel.
+`[project]` metadata and dependencies live in [pyproject.toml](pyproject.toml),
+with a checked-in [uv.lock](uv.lock). Windows D2XX needs FTDI's native library;
+serial transport uses the optional `serial` extra (`pyserial`). The RevPi
+prototype runs on Python 3.11 by copying the package modules, since this
+package currently declares Python 3.13 or newer for installation. The guarded
+HTTP hardware tools use the optional `hardware-tools` extra (`httpx`), which
+is also installed by the development dependency group.
+
+## Contract and boundaries
+
+- The driver selects the expected FTDI serial and `MultiFlo` description on
+  D2XX. Before any motion it also verifies the instrument's in-band product
+  serial, installed pump and cassette, and device-side `Ready` status. Serial
+  transport uses a configured port and relies on that in-band serial check.
+- Every protocol step must use one plate type. Supported plate types are
+  `96_well`, `96_deep_well`, `384_well`, and `384_deep_well`; the default is
+  `96_well`. The 384 deep-well type uses the standard 384 wire geometry with
+  a different default dispense height; this behavior has offline tests but no
+  direct hardware verification.
+- Dispense volume limits are **1–1200 uL** for `1ul`, **5–2500 uL** in 5 uL
+  increments for `5ul`, and **10–3000 uL** in 10 uL increments for `10ul`.
+  Both 384 plate types require the detected `1ul` cassette. `any` still checks
+  the installed cassette before motion. Prime and purge have a typed 1–3000 uL
+  volume field; the driver does not change the instrument's cassette setting.
+- Dispense defaults to full columns and rows. It supports partial column maps,
+  384 odd/even row sections, X offsets from -60 to 60 steps, and Y offsets from
+  -40 to 40. Default dispense heights are 333 (`384_well`), 553
+  (`384_deep_well`), 336 (`96_well`), and 1020 (`96_deep_well`) steps above the
+  carrier. A step may override height within 100–1100; lower means closer.
+- Shake and soak accept 1–600 seconds. Shake encodes the fixture-proven medium
+  speed and X axis only. All input models reject unknown fields.
+
+The API routes are `GET /v1/health`, `GET /v1/device`,
+`POST /v1/operations/{dispense,prime,purge,shake,soak}`,
+`POST /v1/protocols/validate`, `POST /v1/runs`, `GET /v1/runs/{run_id}`,
+and `POST /v1/runs/{run_id}/abort`. See [api.py](src/multiflo/api.py) or the
+generated OpenAPI schema for request and response fields. Starts require a
+client `request_id` and `operator_confirmed_idle: true`. An identical request
+ID returns the original run during that process lifetime; a changed request or
+another active run returns `409`. The operation routes construct one-step
+protocols internally. The protocol routes remain available for multi-step
+clients.
+
+One process owns the USB handle and one worker performs blocking I/O. A step
+uses `Start Batch → operation → Program Step Status until Ready → End Batch`.
+The response to the operation means accepted, not mechanically complete.
+Abort is cooperative between steps; no verified device cancellation or
+pause/resume command is exposed. HTTP disconnects never stop or replay motion.
+Read-only exchanges have bounded retries; motion is never retried after an
+uncertain send. A retained [crash marker](src/multiflo/runner.py) blocks new
+runs until read-only Ready reconciliation or explicit physical reconciliation.
+Request IDs and completed run history are process-local; only the active
+marker persists.
+
+## Evidence and confidence
+
+The instrument used for guarded checks had product and FTDI serial
+`14071419`, basecode `7210200` / `1.12`, a primary peristaltic pump, and no
+secondary pump. The D2XX path used 38400 baud, 8-N-2, no flow control, DTR/RTS,
+and exact serial/description selection. On a RevPi, the same driver completed
+a 10 uL 96-well dispense followed by a five-second shake over `/dev/ttyUSB0`.
+
+Controlled `.LHC` fixtures in [protocols](protocols) established packet fields;
+[golden tests](tests/test_codec.py) pin the resulting bytes. Hardware checks
+established repeated read-only inventory, a five-second shake, a 30-second
+soak, a 100 uL prime, and two 10 uL 384-well odd-row dispenses. The operator
+observed liquid only in the selected odd rows. The earlier 96-deep-well
+dispense showed command acceptance, but its original report preceded the
+recovered completion lifecycle. The later lifecycle checks and RevPi run are
+the stronger completion evidence. These checks are not calibration or volume
+accuracy measurements. Purge, X/Y offsets, and 384 deep-well dispensing have
+offline coverage but no direct hardware motion evidence.
+
+The observed device response starts with an ACK byte and returns message ID
+zero, even when a request used another ID. The driver therefore permits only
+one in-flight request and matches the command ID. Frame/profile behavior and
+fault cases are pinned by [transport](tests/test_transport.py),
+[driver](tests/test_driver.py), and [retry](tests/test_retries.py) tests.
+
+## Hardware procedure
+
+1. Close Liquid Handling Control normally; confirm no other process owns the
+   instrument. Confirm the exact serial and intended cassette/plate.
+2. Check tubing, liquid or waste, cover, carrier path, and emergency stop.
+   Verify the physical setup for the specific operation.
+3. Run the offline suite, then use
+   [hardware_smoke.py](src/multiflo/tools/hardware_smoke.py) and
+   [hardware_inventory.py](src/multiflo/tools/hardware_inventory.py) for
+   read-only checks. Use the guarded
+   [single-step tool](src/multiflo/tools/hardware_phase3_step.py) only with its
+   operation-specific authorization token. `--dry-run` prints encoded bytes
+   without opening the instrument.
+4. If a run reports `unknown_execution_state` or leaves a marker, inspect the
+   instrument and use the local
+   [reconciliation tool](src/multiflo/tools/hardware_reconcile.py). Do not
+   resubmit the same motion. A stationary stale Busy batch has a separate
+   guarded [End Batch recovery tool](src/multiflo/tools/hardware_end_batch_recovery.py).
+
+The service binds to loopback with one worker by default. Non-loopback binding
+is an explicit opt-in; deployment access control is outside this driver.
+Keep the crash marker at a stable writable path on deployed systems.
+
+## Verification and remaining work
+
+Run `uv sync --locked` and
+`uv run --locked python -m unittest discover -s tests -q`. Offline tests cover
+models, golden packets, D2XX and serial behavior, read-only/motion errors,
+whole-protocol preflight, run deduplication, abort, marker reconciliation,
+and the API contract. Hardware checks are opt-in; ordinary tests do not move
+the device.
+
+- Keep direct hardware evidence for purge, offsets, and 384 deep-well behavior
+  open until a guarded physical check is authorized and performed.
+- The RevPi serial path is a working prototype. Its deployment currently needs
+  a separately installed `pyserial`, a stable marker location, and an explicit
+  service/package setup if it becomes permanent.
+- Keep `/v1/runs` while multi-step clients use it. Removal requires a separate
+  compatibility decision. Do not add raw hardware, firmware, or maintenance
+  HTTP endpoints to simplify clients.
+- Before publishing, review inclusion of vendor evidence files and confirm the
+  private GitHub destination. Keep this file current as behavior changes.

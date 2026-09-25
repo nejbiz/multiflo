@@ -1,4 +1,4 @@
-"""Guarded Phase 5 end-to-end API check against the real instrument.
+"""Guarded end-to-end API check against the real instrument.
 
 This drives a real loopback Uvicorn server with the real D2XX transport, so the
 whole HTTP boundary is exercised, not just an in-process test client. It is
@@ -189,7 +189,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--plate-type",
-        choices=("96_well", "96_deep_well", "384_well"),
+        choices=("96_well", "96_deep_well", "384_well", "384_deep_well"),
         default="96_well",
     )
     parser.add_argument("--duration-seconds", type=int, default=5)
@@ -203,8 +203,8 @@ def main() -> int:
         parser.error(
             f"--authorization must be {AUTHORIZATION} before a motion end-to-end run"
         )
-    if not 1 <= args.duration_seconds <= 60:
-        parser.error("--duration-seconds must be between 1 and 60")
+    if not 1 <= args.duration_seconds <= 600:
+        parser.error("--duration-seconds must be between 1 and 600")
     if args.host != "127.0.0.1":
         parser.error("the guarded end-to-end check binds loopback only")
 

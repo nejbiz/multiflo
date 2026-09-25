@@ -42,6 +42,7 @@ from .models import (
     Protocol,
     Shake,
     Soak,
+    WELL_384_PLATE_TYPES,
     validate_volume_for_cassette,
 )
 from .transport import ByteTransport
@@ -363,9 +364,8 @@ class MultiFloDriver:
     def authorize_motion(self, *, operator_confirmed_idle: bool) -> None:
         """Record an operator's per-run idle/setup confirmation.
 
-        The base protocol's authoritative busy query is not yet recovered. This
-        confirmation is therefore deliberately required before the fresh
-        communication and inventory preflight used by Phase 2.
+        Physical setup cannot be inferred from device status. This confirmation
+        is required before the fresh Ready-state and inventory preflight.
         """
 
         if not operator_confirmed_idle:
@@ -425,6 +425,14 @@ class MultiFloDriver:
                     f"instrument setting is {installed.value}"
                 )
             if isinstance(step, PeristalticDispense):
+                if (
+                    step.plate_type in WELL_384_PLATE_TYPES
+                    and installed is not CassetteType.ONE_UL
+                ):
+                    raise PreconditionError(
+                        f"step {index} uses a 384-well plate, which requires a "
+                        "1ul cassette"
+                    )
                 try:
                     validate_volume_for_cassette(step.volume_ul, installed)
                     if step.pre_dispense_volume_ul:
@@ -437,6 +445,11 @@ class MultiFloDriver:
 
     def peristaltic_dispense(self, step: PeristalticDispense) -> ExchangeResult:
         installed = self._check_peristaltic_cassette(step.cassette_type)
+        if (
+            step.plate_type in WELL_384_PLATE_TYPES
+            and installed is not CassetteType.ONE_UL
+        ):
+            raise PreconditionError("384-well dispense requires a 1ul cassette")
         validate_volume_for_cassette(step.volume_ul, installed)
         if step.pre_dispense_volume_ul:
             validate_volume_for_cassette(step.pre_dispense_volume_ul, installed)

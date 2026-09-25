@@ -211,7 +211,7 @@ class CrashMarkerTests(unittest.TestCase):
 
 class GeometryValidationTests(unittest.TestCase):
     def test_a_protocol_may_not_mix_plate_geometries(self) -> None:
-        """Step defaults differ, so this is easy to do by accident."""
+        """Explicitly mixed physical plate geometries are rejected."""
 
         from pydantic import ValidationError as PydanticValidationError
         from multiflo.models import Shake
@@ -220,8 +220,11 @@ class GeometryValidationTests(unittest.TestCase):
             Protocol(
                 name="mixed",
                 steps=[
-                    PeristalticDispense(volume_ul=100),  # 96_deep_well default
-                    Shake(duration_seconds=5),  # 96_well default
+                    PeristalticDispense(
+                        volume_ul=100,
+                        plate_type="96_deep_well",
+                    ),
+                    Shake(duration_seconds=5),
                 ],
             )
 

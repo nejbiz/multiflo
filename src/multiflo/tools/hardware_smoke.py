@@ -1,4 +1,4 @@
-"""Guarded Phase 1 hardware smoke test; sends only command 0x0073."""
+"""Guarded read-only communication check; sends only command 0x0073."""
 
 from __future__ import annotations
 

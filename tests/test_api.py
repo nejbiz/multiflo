@@ -211,7 +211,42 @@ class ApiTests(unittest.TestCase):
         finally:
             runner.shutdown()
 
-    def test_calib21_unsafe_volume_is_rejected_by_api(self) -> None:
+    def test_384_deep_well_validates_without_an_lhc_fixture(self) -> None:
+        fake = ScriptedFakeTransport()
+        runner = ProtocolRunner(
+            MultiFloDriver(fake, expected_product_serial="14071419"),
+            crash_marker_path=self.marker_path,
+        )
+        try:
+            client = TestClient(create_app(runner))
+            result = client.post(
+                "/v1/protocols/validate",
+                json={
+                    "name": "384 deep-well",
+                    "steps": [
+                        {
+                            "operation": "peristaltic_dispense",
+                            "plate_type": "384_deep_well",
+                            "volume_ul": 10,
+                            "cassette_type": "1ul",
+                            "columns": [1, 24],
+                            "row_sections": "even",
+                        }
+                    ],
+                },
+            )
+
+            self.assertEqual(result.status_code, 200)
+            step = result.json()["protocol"]["steps"][0]
+            self.assertEqual(step["plate_type"], "384_deep_well")
+            self.assertEqual(step["columns"], [1, 24])
+            self.assertEqual(step["row_sections"], "even")
+            self.assertFalse(fake.is_open)
+            self.assertEqual(fake.writes, [])
+        finally:
+            runner.shutdown()
+
+    def test_calib21_1ul_volume_is_accepted_by_api(self) -> None:
         fake = ScriptedFakeTransport()
         runner = ProtocolRunner(
             MultiFloDriver(fake, expected_product_serial="14071419"),
@@ -234,7 +269,7 @@ class ApiTests(unittest.TestCase):
                     ],
                 },
             )
-            self.assertEqual(result.status_code, 422)
+            self.assertEqual(result.status_code, 200)
             self.assertFalse(fake.is_open)
             self.assertEqual(fake.writes, [])
         finally:

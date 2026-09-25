@@ -143,7 +143,7 @@ def main() -> int:
     parser.add_argument("--shake", action="store_true")
     parser.add_argument(
         "--plate-type",
-        choices=("96_well", "96_deep_well", "384_well"),
+        choices=("96_well", "96_deep_well", "384_well", "384_deep_well"),
         default="96_well",
     )
     parser.add_argument("--cassette", choices=("1ul", "5ul", "10ul"), default="1ul")

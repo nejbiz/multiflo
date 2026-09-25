@@ -1,4 +1,4 @@
-"""Phase 5 contract tests for the finalized FastAPI boundary."""
+"""Contract tests for the FastAPI boundary."""
 
 from __future__ import annotations
 
@@ -40,6 +40,11 @@ EXPECTED_ROUTES = {
     ("/v1/runs", "post"),
     ("/v1/runs/{run_id}", "get"),
     ("/v1/runs/{run_id}/abort", "post"),
+    ("/v1/operations/dispense", "post"),
+    ("/v1/operations/prime", "post"),
+    ("/v1/operations/purge", "post"),
+    ("/v1/operations/shake", "post"),
+    ("/v1/operations/soak", "post"),
 }
 
 
@@ -94,7 +99,17 @@ class ApiContractTests(unittest.TestCase):
         surface = " ".join(sorted(path for path, _ in routes) + sorted(operation_ids)).lower()
         for forbidden in ("raw", "packet", "command", "firmware", "pause", "resume"):
             self.assertNotIn(forbidden, surface)
-        for model in ("StartRunRequest", "Protocol", "RunStatus", "DeviceStatus"):
+        for model in (
+            "StartRunRequest",
+            "DispenseOperationRequest",
+            "PrimeOperationRequest",
+            "PurgeOperationRequest",
+            "ShakeOperationRequest",
+            "SoakOperationRequest",
+            "Protocol",
+            "RunStatus",
+            "DeviceStatus",
+        ):
             self.assertFalse(
                 document["components"]["schemas"][model].get("additionalProperties", True),
                 f"{model} must reject unknown fields",
@@ -113,7 +128,7 @@ class ApiContractTests(unittest.TestCase):
             {
                 "status": "ok",
                 "service": "multiflo",
-                "api_version": "1.0.0",
+                "api_version": "1.2.0",
                 "controller_state": "disconnected",
                 "reconciliation_required": False,
                 "active_run_id": None,
@@ -238,6 +253,115 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(repeated.json()["state"], "completed")
         self.assertEqual(repeated.json()["completed_steps"], 1)
         fake.assert_script_consumed()
+
+    def test_each_operation_endpoint_submits_exactly_one_typed_step(self) -> None:
+        driver = FakeDriver()
+        runner = ProtocolRunner(driver, crash_marker_path=self.marker_path)  # type: ignore[arg-type]
+        self.addCleanup(runner.shutdown)
+        client = TestClient(create_app(runner))
+        cases = (
+            ("dispense", {"volume_ul": 100, "cassette_type": "5ul"}, "peristaltic_dispense"),
+            ("prime", {"volume_ul": 100}, "peristaltic_prime"),
+            ("purge", {"volume_ul": 100}, "peristaltic_purge"),
+            ("shake", {"duration_seconds": 600}, "shake"),
+            ("soak", {"duration_seconds": 600}, "soak"),
+        )
+
+        for index, (route, parameters, operation) in enumerate(cases):
+            with self.subTest(route=route):
+                result = client.post(
+                    f"/v1/operations/{route}",
+                    json={
+                        "request_id": f"operation-{index}",
+                        "operator_confirmed_idle": True,
+                        **parameters,
+                    },
+                )
+                self.assertEqual(result.status_code, 202)
+                final = self._wait_for_terminal(client, result.json()["run_id"])
+                self.assertEqual(final["state"], "completed")
+                protocol = driver.validated_protocols[index]
+                self.assertEqual(len(protocol.steps), 1)
+                self.assertEqual(protocol.steps[0].operation, operation)
+
+        self.assertEqual(driver.motion_calls, len(cases))
+        self.assertEqual(
+            driver.validated_protocols[0].steps[0].plate_type.value,
+            "96_well",
+        )
+
+    def test_operation_requests_reject_unknown_and_invalid_fields_before_io(self) -> None:
+        fake = ScriptedFakeTransport()
+        runner = self._runner(fake)
+        client = TestClient(create_app(runner))
+        cases = (
+            ("dispense", {"volume_ul": 100}),
+            ("prime", {"volume_ul": 100}),
+            ("purge", {"volume_ul": 100}),
+            ("shake", {"duration_seconds": 5}),
+            ("soak", {"duration_seconds": 5}),
+        )
+
+        for index, (route, parameters) in enumerate(cases):
+            with self.subTest(route=route, invalid="unknown"):
+                result = client.post(
+                    f"/v1/operations/{route}",
+                    json={
+                        "request_id": f"invalid-{index}",
+                        "operator_confirmed_idle": True,
+                        "unsupported": True,
+                        **parameters,
+                    },
+                )
+                self.assertEqual(result.status_code, 422)
+
+        for route in ("shake", "soak"):
+            with self.subTest(route=route, invalid="duration"):
+                result = client.post(
+                    f"/v1/operations/{route}",
+                    json={
+                        "request_id": f"invalid-{route}",
+                        "operator_confirmed_idle": True,
+                        "duration_seconds": 601,
+                    },
+                )
+                self.assertEqual(result.status_code, 422)
+
+        incompatible_384 = client.post(
+            "/v1/operations/dispense",
+            json={
+                "request_id": "invalid-384-cassette",
+                "operator_confirmed_idle": True,
+                "plate_type": "384_well",
+                "volume_ul": 100,
+                "cassette_type": "5ul",
+            },
+        )
+        self.assertEqual(incompatible_384.status_code, 422)
+
+        self.assertFalse(fake.is_open)
+        self.assertEqual(fake.writes, [])
+
+    def test_operation_request_id_replay_does_not_repeat_motion(self) -> None:
+        driver = FakeDriver()
+        runner = ProtocolRunner(driver, crash_marker_path=self.marker_path)  # type: ignore[arg-type]
+        self.addCleanup(runner.shutdown)
+        client = TestClient(create_app(runner))
+        payload = {
+            "request_id": "touchscreen-shake-1",
+            "operator_confirmed_idle": True,
+            "duration_seconds": 5,
+        }
+
+        first = client.post("/v1/operations/shake", json=payload)
+        self.assertEqual(first.status_code, 202)
+        final = self._wait_for_terminal(client, first.json()["run_id"])
+        self.assertEqual(final["state"], "completed")
+
+        repeated = client.post("/v1/operations/shake", json=payload)
+        self.assertEqual(repeated.status_code, 200)
+        self.assertEqual(repeated.json()["run_id"], first.json()["run_id"])
+        self.assertEqual(driver.motion_calls, 1)
 
     def test_repeated_request_id_with_a_different_protocol_is_a_conflict(self) -> None:
         driver = FakeDriver(block=True, release_on_close=True)

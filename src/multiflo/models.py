@@ -23,12 +23,18 @@ class CassetteType(str, Enum):
 
 class PlateType(str, Enum):
     WELL_384 = "384_well"
+    DEEP_WELL_384 = "384_deep_well"
     WELL_96 = "96_well"
     DEEP_WELL_96 = "96_deep_well"
 
 
+WELL_384_PLATE_TYPES = frozenset(
+    (PlateType.WELL_384, PlateType.DEEP_WELL_384)
+)
+
 PLATE_COLUMN_COUNTS = {
     PlateType.WELL_384: 24,
+    PlateType.DEEP_WELL_384: 24,
     PlateType.WELL_96: 12,
     PlateType.DEEP_WELL_96: 12,
 }
@@ -41,10 +47,12 @@ CASSETTE_CODES = {
 }
 CASSETTE_TYPES_BY_CODE = {value: key for key, value in CASSETTE_CODES.items()}
 CASSETTE_VOLUME_RANGES_UL = {
-    CassetteType.ONE_UL: (1, 50),
+    CassetteType.ONE_UL: (1, 1200),
     CassetteType.FIVE_UL: (5, 2500),
     CassetteType.TEN_UL: (10, 3000),
 }
+MIN_DISPENSE_HEIGHT_STEPS = 100
+MAX_DISPENSE_HEIGHT_STEPS = 1100
 
 
 def validate_volume_for_cassette(volume_ul: int, cassette_type: CassetteType) -> None:
@@ -72,7 +80,7 @@ class PeristalticDispense(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     operation: Literal["peristaltic_dispense"] = "peristaltic_dispense"
-    plate_type: PlateType = PlateType.DEEP_WELL_96
+    plate_type: PlateType = PlateType.WELL_96
     pump: Literal["primary"] = "primary"
     volume_ul: int = Field(ge=1, le=3000)
     flow_rate: FlowRate = FlowRate.MEDIUM
@@ -88,11 +96,20 @@ class PeristalticDispense(BaseModel):
     # depth differs from the standard geometry: a value lower than the plate
     # default brings the manifold closer to the carrier. The bounds are a
     # conservative guard around the observed 333-975 range, not a manual limit.
-    dispense_height_steps: int | None = Field(default=None, ge=100, le=2000)
+    dispense_height_steps: int | None = Field(
+        default=None,
+        ge=MIN_DISPENSE_HEIGHT_STEPS,
+        le=MAX_DISPENSE_HEIGHT_STEPS,
+    )
 
     @model_validator(mode="after")
     def validate_dispense(self) -> "PeristalticDispense":
         validate_volume_for_cassette(self.volume_ul, self.cassette_type)
+        if (
+            self.plate_type in WELL_384_PLATE_TYPES
+            and self.cassette_type not in (CassetteType.ANY, CassetteType.ONE_UL)
+        ):
+            raise ValueError("384-well dispense requires a 1ul cassette")
         if (self.pre_dispense_volume_ul == 0) != (self.pre_dispense_cycles == 0):
             raise ValueError(
                 "pre-dispense volume and cycles must either both be zero or both be positive"
@@ -114,7 +131,7 @@ class PeristalticDispense(BaseModel):
                 raise ValueError("dispense columns must be unique")
         if (
             self.row_sections != "all"
-            and self.plate_type is not PlateType.WELL_384
+            and self.plate_type not in WELL_384_PLATE_TYPES
         ):
             raise ValueError("row-section selection is supported only for 384-well plates")
         return self
@@ -147,7 +164,7 @@ class Shake(BaseModel):
 
     operation: Literal["shake"] = "shake"
     plate_type: PlateType = PlateType.WELL_96
-    duration_seconds: int = Field(ge=1, le=60)
+    duration_seconds: int = Field(ge=1, le=600)
     move_carrier_home: bool = True
     axis: Literal["x"] = "x"
     speed: Literal["medium"] = "medium"
@@ -158,7 +175,7 @@ class Soak(BaseModel):
 
     operation: Literal["soak"] = "soak"
     plate_type: PlateType = PlateType.WELL_96
-    duration_seconds: int = Field(ge=1, le=60)
+    duration_seconds: int = Field(ge=1, le=600)
     move_carrier_home: bool = True
 
 
@@ -179,10 +196,9 @@ class Protocol(BaseModel):
         """Reject a protocol that mixes plate types.
 
         Each step sends its own plate selector in Start Batch, and plate type
-        selects the dispense height. The step defaults differ (dispense is
-        96-deep-well, everything else is 96-well), so a protocol that leaves
-        plate_type unset on some steps would silently run two geometries
-        against one physical plate.
+        selects the dispense height. All steps currently default to 96-well,
+        but explicit mixed geometries would still run against one physical
+        plate and are therefore rejected.
         """
 
         plate_types = {step.plate_type for step in self.steps}

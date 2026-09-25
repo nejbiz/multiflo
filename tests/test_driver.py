@@ -96,6 +96,22 @@ class DriverTests(unittest.TestCase):
                 )
             )
 
+        with self.assertRaisesRegex(
+            PreconditionError,
+            "step 0 uses a 384-well plate.*requires a 1ul cassette",
+        ):
+            driver.validate_protocol(
+                Protocol(
+                    name="384 cassette preflight",
+                    steps=[
+                        PeristalticDispense(
+                            volume_ul=100,
+                            plate_type="384_well",
+                        )
+                    ],
+                )
+            )
+
     def test_inventory_uses_peristaltic_only_machine_profile(self) -> None:
         version = b"7210200" + b"1.12    " + b"ABFB" + b"61FF" + b"103  " + b"002" + b"003"
         packets = [
@@ -123,6 +139,54 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(inventory.modules.primary_cassette, CassetteType.FIVE_UL)
         self.assertFalse(hasattr(inventory.modules, "syringe_manifold"))
         fake.assert_script_consumed()
+
+    def test_phase6_dispense_limits_are_resolved_against_inventory(self) -> None:
+        driver = MultiFloDriver(ScriptedFakeTransport())
+
+        def set_installed(cassette: CassetteType) -> None:
+            driver._motion_preflight = ReadOnlyDeviceInfo(
+                "14071419",
+                BasecodeVersionInfo("", "", "", "", "", "", "", b""),
+                InstalledModules(True, False, True, cassette),
+            )
+
+        set_installed(CassetteType.ONE_UL)
+        driver.validate_protocol(
+            Protocol(
+                name="1ul upper boundary",
+                steps=[PeristalticDispense(volume_ul=1200)],
+            )
+        )
+        with self.assertRaisesRegex(PreconditionError, "between 1 and 1200"):
+            driver.validate_protocol(
+                Protocol(
+                    name="1ul above boundary",
+                    steps=[PeristalticDispense(volume_ul=1201)],
+                )
+            )
+
+        for plate_type in ("384_well", "384_deep_well"):
+            for cassette in (CassetteType.FIVE_UL, CassetteType.TEN_UL):
+                with self.subTest(
+                    plate_type=plate_type,
+                    cassette=cassette.value,
+                ):
+                    set_installed(cassette)
+                    with self.assertRaisesRegex(
+                        PreconditionError,
+                        "384-well plate.*requires a 1ul cassette",
+                    ):
+                        driver.validate_protocol(
+                            Protocol(
+                                name="384 cassette preflight",
+                                steps=[
+                                    PeristalticDispense(
+                                        volume_ul=100,
+                                        plate_type=plate_type,
+                                    )
+                                ],
+                            )
+                        )
 
     def test_motion_is_serial_and_cassette_guarded(self) -> None:
         version = b"7210200" + b"1.12    " + b"ABFB" + b"61FF" + b"103  " + b"002" + b"003"

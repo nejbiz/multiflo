@@ -261,6 +261,7 @@ class FakeDriver:
         self.motion_started = Event()
         self.release_motion = Event()
         self.motion_calls = 0
+        self.validated_protocols: list[Protocol] = []
         self.query_count = 0
         self.closed = False
 
@@ -290,7 +291,7 @@ class FakeDriver:
         return device_info(self.cassette)
 
     def validate_protocol(self, protocol: Protocol) -> None:
-        pass
+        self.validated_protocols.append(protocol)
 
     def query_program_step_status(self) -> ProgramStepStatus:
         self.query_count += 1

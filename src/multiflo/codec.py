@@ -31,6 +31,9 @@ _SHAKE_SOAK = struct.Struct("<BBHBBH4s")
 
 _PLATE_CODES = {
     PlateType.WELL_384: 1,
+    # The current 384 deep-well plate has the standard 384 geometry on the
+    # wire. It is a distinct driver type only so dispense can use its real Z.
+    PlateType.DEEP_WELL_384: 1,
     PlateType.WELL_96: 4,
     PlateType.DEEP_WELL_96: 5,
 }
@@ -43,9 +46,11 @@ _PLATE_CODES = {
 # the golden tests via an explicit dispense_height_steps override.
 VENDOR_DEEP_WELL_DISPENSE_HEIGHT_STEPS = 929
 DEEP_WELL_DISPENSE_HEIGHT_STEPS = 1020
+DEEP_WELL_384_DISPENSE_HEIGHT_STEPS = 553
 
 _DISPENSE_HEIGHTS = {
     PlateType.WELL_384: 333,
+    PlateType.DEEP_WELL_384: DEEP_WELL_384_DISPENSE_HEIGHT_STEPS,
     PlateType.WELL_96: 336,
     PlateType.DEEP_WELL_96: DEEP_WELL_DISPENSE_HEIGHT_STEPS,
 }
@@ -62,6 +67,7 @@ _ROW_SKIP_MASKS = {
 # the deep-well and 384-well geometries and clears them for standard 96-well.
 _UNUSED_MAP_POSITIONS_ENABLED = {
     PlateType.WELL_384: True,
+    PlateType.DEEP_WELL_384: True,
     PlateType.WELL_96: False,
     PlateType.DEEP_WELL_96: True,
 }
